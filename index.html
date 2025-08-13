@@ -1,0 +1,397 @@
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
+// PapaParse will be loaded dynamically from a CDN.
+import { useDropzone } from 'react-dropzone';
+import { UploadCloud, File, X, ChevronDown, ChevronRight, Filter } from 'lucide-react';
+
+// Main App Component
+const App = () => {
+    const [data, setData] = useState([]);
+    const [headers, setHeaders] = useState([]);
+    const [customMetricKeys, setCustomMetricKeys] = useState([]);
+    const [filters, setFilters] = useState({});
+    const [fileName, setFileName] = useState('');
+    const [error, setError] = useState('');
+    const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+    const [isScriptLoaded, setIsScriptLoaded] = useState(false);
+
+    // Effect to dynamically load the PapaParse script
+    useEffect(() => {
+        if (window.Papa) {
+            setIsScriptLoaded(true);
+            return;
+        }
+        const script = document.createElement('script');
+        script.src = "https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js";
+        script.async = true;
+        script.onload = () => setIsScriptLoaded(true);
+        script.onerror = () => setError("Failed to load parsing library. Please check your connection and refresh.");
+        document.body.appendChild(script);
+
+        return () => {
+            // Check if the script is still in the body before trying to remove it
+            if (document.body.contains(script)) {
+                 document.body.removeChild(script);
+            }
+        };
+    }, []);
+
+
+    const onDrop = useCallback((acceptedFiles) => {
+        if (!isScriptLoaded) {
+            setError("Parsing library is still loading. Please wait a moment and try again.");
+            return;
+        }
+
+        if (acceptedFiles.length > 0) {
+            const file = acceptedFiles[0];
+            if (file.type !== 'text/csv') {
+                setError('Invalid file type. Please upload a CSV file.');
+                return;
+            }
+            setFileName(file.name);
+            setError('');
+
+            window.Papa.parse(file, {
+                header: true,
+                skipEmptyLines: true,
+                complete: (results) => {
+                    const parsedData = results.data.map(row => {
+                        const customMetricsRaw = row['Custom Metrics'] || '';
+                        const customMetrics = {};
+                        if (customMetricsRaw) {
+                            customMetricsRaw.split('||').forEach(metric => {
+                                const [key, value] = metric.split('=');
+                                if (key) {
+                                    customMetrics[key.trim()] = value ? value.trim() : null;
+                                }
+                            });
+                        }
+                        return { ...row, ...customMetrics };
+                    });
+
+                    setData(parsedData);
+                    const allHeaders = results.meta.fields;
+                    const newCustomMetricKeys = new Set();
+                    parsedData.forEach(row => {
+                         const customMetricsRaw = row['Custom Metrics'] || '';
+                         if (customMetricsRaw) {
+                            customMetricsRaw.split('||').forEach(metric => {
+                                const [key] = metric.split('=');
+                                if(key) newCustomMetricKeys.add(key.trim());
+                            });
+                         }
+                    });
+                    
+                    setHeaders(allHeaders);
+                    setCustomMetricKeys(Array.from(newCustomMetricKeys));
+                    setFilters({});
+                }
+            });
+        }
+    }, [isScriptLoaded]);
+
+    const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, disabled: !isScriptLoaded });
+
+    const filterOptions = useMemo(() => {
+        if (data.length === 0) return {};
+        const options = {};
+        const filterableColumns = ['Domain', 'Status', 'Channel', 'Escalated', 'Amelia Handled', 'Agent Handled', ...customMetricKeys];
+        filterableColumns.forEach(header => {
+            const uniqueValues = [...new Set(data.map(row => row[header]).filter(val => val !== undefined && val !== null && val !== ''))];
+            if (uniqueValues.length > 1) {
+                 options[header] = uniqueValues.sort();
+            }
+        });
+        return options;
+    }, [data, customMetricKeys]);
+
+    const filteredData = useMemo(() => {
+        return data.filter(row => {
+            return Object.entries(filters).every(([key, value]) => {
+                if (value === '') return true;
+                return String(row[key]) === String(value);
+            });
+        });
+    }, [data, filters]);
+
+    const handleFilterChange = (key, value) => {
+        setFilters(prev => ({ ...prev, [key]: value }));
+    };
+    
+    const clearFilters = () => {
+        setFilters({});
+    };
+
+    const resetApp = () => {
+        setData([]);
+        setHeaders([]);
+        setCustomMetricKeys([]);
+        setFilters({});
+        setFileName('');
+        setError('');
+    };
+
+    if (data.length === 0) {
+        return (
+            <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4 text-center">
+                <div 
+                    {...getRootProps()} 
+                    className={`w-full max-w-lg p-10 border-2 border-dashed rounded-xl transition-colors ${isScriptLoaded ? 'cursor-pointer' : 'cursor-wait'} ${isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-100'}`}
+                >
+                    <input {...getInputProps()} />
+                    <div className="flex flex-col items-center justify-center space-y-4">
+                        <div className="bg-blue-100 p-4 rounded-full">
+                            <UploadCloud className="w-10 h-10 text-blue-600" />
+                        </div>
+                        <p className="text-lg font-semibold text-gray-700">{isScriptLoaded ? 'Drag & drop your CSV file here' : 'Loading analysis tools...'}</p>
+                        <p className="text-sm text-gray-500">or</p>
+                        <button disabled={!isScriptLoaded} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed">
+                            Browse files
+                        </button>
+                         <p className="text-xs text-gray-400 mt-2">Only *.csv files are accepted</p>
+                    </div>
+                </div>
+                {error && <p className="text-red-500 mt-4">{error}</p>}
+                 <div className="mt-8 text-left max-w-lg w-full">
+                    <h3 className="text-xl font-bold text-gray-800 mb-2">Welcome to the Conversation Analyzer</h3>
+                    <p className="text-gray-600">This tool helps you process and analyze conversation reports. Simply upload your CSV file to get started. The application will automatically:</p>
+                    <ul className="list-disc list-inside mt-2 text-gray-600 space-y-1">
+                        <li>Parse and display your conversation data.</li>
+                        <li>Provide a summary of key metrics.</li>
+                        <li>Unpack the 'Custom Metrics' column into filterable fields.</li>
+                        <li>Allow you to filter and explore your data dynamically.</li>
+                    </ul>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="min-h-screen bg-gray-100 font-sans flex">
+            {isSidebarOpen && (
+                <aside className="w-80 bg-white p-6 border-r border-gray-200 flex flex-col shadow-lg">
+                    <div className="flex-grow overflow-y-auto">
+                        <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center"><Filter className="mr-2 text-blue-600"/>Filters</h2>
+                        <FilterControls filters={filters} options={filterOptions} onChange={handleFilterChange} customMetricKeys={customMetricKeys} />
+                    </div>
+                    <button onClick={clearFilters} className="w-full mt-4 py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold transition-colors flex-shrink-0">
+                        Clear All Filters
+                    </button>
+                </aside>
+            )}
+
+            <main className="flex-1 p-6 md:p-8">
+                <header className="flex justify-between items-center mb-6">
+                    <div className="flex items-center">
+                         <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 rounded-md hover:bg-gray-200 mr-4">
+                            {isSidebarOpen ? <X className="w-6 h-6 text-gray-600" /> : <Filter className="w-6 h-6 text-gray-600" />}
+                        </button>
+                        <div>
+                            <h1 className="text-3xl font-bold text-gray-800">Conversation Analysis</h1>
+                            <div className="flex items-center text-sm text-gray-500 mt-1">
+                                <File className="w-4 h-4 mr-2" />
+                                <span>{fileName}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <button onClick={resetApp} className="px-4 py-2 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600 transition-colors flex items-center">
+                        <UploadCloud className="w-5 h-5 mr-2"/> Upload New File
+                    </button>
+                </header>
+
+                <SummaryPanel data={filteredData} allData={data} />
+                
+                <div className="mt-8 bg-white rounded-xl shadow-md overflow-hidden">
+                    <DataTable data={filteredData} headers={headers} customMetricKeys={customMetricKeys} />
+                </div>
+            </main>
+        </div>
+    );
+};
+
+// Filter Controls Component
+const FilterControls = ({ filters, options, onChange, customMetricKeys = [] }) => {
+    const [openSections, setOpenSections] = useState({ standard: true, custom: true });
+
+    const toggleSection = (section) => {
+        setOpenSections(prev => ({ ...prev, [section]: !prev[section] }));
+    };
+
+    const standardFilterKeys = Object.keys(options).filter(key => !customMetricKeys.includes(key));
+
+    return (
+        <div className="space-y-6">
+            <div>
+                <button onClick={() => toggleSection('standard')} className="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">
+                    Standard Metrics
+                    {openSections.standard ? <ChevronDown /> : <ChevronRight />}
+                </button>
+                {openSections.standard && (
+                    <div className="space-y-4 pl-2 border-l-2 border-blue-200">
+                        {standardFilterKeys.map(key => (
+                            <div key={key}>
+                                <label className="block text-sm font-medium text-gray-600 mb-1">{key}</label>
+                                <select
+                                    value={filters[key] || ''}
+                                    onChange={(e) => onChange(key, e.target.value)}
+                                    className="w-full p-2 border border-gray-300 rounded-md bg-white shadow-sm focus:ring-blue-500 focus:border-blue-500"
+                                >
+                                    <option value="">All</option>
+                                    {options[key]?.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                                </select>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+            {customMetricKeys.length > 0 && (
+                 <div>
+                    <button onClick={() => toggleSection('custom')} className="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">
+                        Custom Metrics
+                        {openSections.custom ? <ChevronDown /> : <ChevronRight />}
+                    </button>
+                    {openSections.custom && (
+                         <div className="space-y-4 pl-2 border-l-2 border-green-200">
+                            {customMetricKeys.map(key => (
+                                <div key={key}>
+                                    <label className="block text-sm font-medium text-gray-600 mb-1">{key}</label>
+                                    <select
+                                        value={filters[key] || ''}
+                                        onChange={(e) => onChange(key, e.target.value)}
+                                        className="w-full p-2 border border-gray-300 rounded-md bg-white shadow-sm focus:ring-blue-500 focus:border-blue-500"
+                                    >
+                                        <option value="">All</option>
+                                        {options[key]?.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                                    </select>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// Summary Panel Component
+const SummaryPanel = ({ data, allData }) => {
+    const summary = useMemo(() => {
+        if (allData.length === 0) return { timeRange: 'N/A', totalConversations: 0, uniqueDomains: 0, filteredConversations: 0 };
+
+        const dates = allData.map(row => new Date(row.Created)).filter(d => !isNaN(d));
+        const minDate = dates.length > 0 ? new Date(Math.min.apply(null, dates)) : null;
+        const maxDate = dates.length > 0 ? new Date(Math.max.apply(null, dates)) : null;
+
+        const timeRange = minDate && maxDate 
+            ? `${minDate.toLocaleDateString()} - ${maxDate.toLocaleDateString()}`
+            : 'N/A';
+        
+        const uniqueDomains = new Set(allData.map(r => r.Domain)).size;
+
+        return {
+            timeRange,
+            totalConversations: allData.length,
+            filteredConversations: data.length,
+            uniqueDomains
+        };
+    }, [data, allData]);
+
+    return (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <SummaryCard title="Time Range" value={summary.timeRange} />
+            <SummaryCard title="Total Conversations" value={summary.totalConversations.toLocaleString()} />
+            <SummaryCard title="Filtered Conversations" value={summary.filteredConversations.toLocaleString()} />
+            <SummaryCard title="Unique Domains" value={summary.uniqueDomains.toLocaleString()} />
+        </div>
+    );
+};
+
+const SummaryCard = ({ title, value }) => (
+    <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
+        <h3 className="text-sm font-medium text-gray-500">{title}</h3>
+        <p className="text-2xl font-bold text-gray-800 mt-1">{value}</p>
+    </div>
+);
+
+
+// Data Table Component
+const DataTable = ({ data, headers, customMetricKeys }) => {
+    const [sortConfig, setSortConfig] = useState({ key: null, direction: 'ascending' });
+
+    const sortedData = useMemo(() => {
+        let sortableData = [...data];
+        if (sortConfig.key !== null) {
+            sortableData.sort((a, b) => {
+                const valA = a[sortConfig.key];
+                const valB = b[sortConfig.key];
+                if (valA < valB) {
+                    return sortConfig.direction === 'ascending' ? -1 : 1;
+                }
+                if (valA > valB) {
+                    return sortConfig.direction === 'ascending' ? 1 : -1;
+                }
+                return 0;
+            });
+        }
+        return sortableData;
+    }, [data, sortConfig]);
+
+    const requestSort = (key) => {
+        let direction = 'ascending';
+        if (sortConfig.key === key && sortConfig.direction === 'ascending') {
+            direction = 'descending';
+        }
+        setSortConfig({ key, direction });
+    };
+
+    const getSortIndicator = (key) => {
+        if (sortConfig.key !== key) return null;
+        return sortConfig.direction === 'ascending' ? ' ▲' : ' ▼';
+    };
+    
+    const displayHeaders = headers.filter(h => h !== 'Custom Metrics');
+
+    return (
+        <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                    <tr>
+                        {displayHeaders.map(header => (
+                            <th key={header} onClick={() => requestSort(header)} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer whitespace-nowrap">
+                                {header}{getSortIndicator(header)}
+                            </th>
+                        ))}
+                        {customMetricKeys.map(key => (
+                             <th key={key} onClick={() => requestSort(key)} className="px-6 py-3 text-left text-xs font-medium text-green-600 bg-green-50 uppercase tracking-wider cursor-pointer whitespace-nowrap">
+                                {key}{getSortIndicator(key)}
+                            </th>
+                        ))}
+                    </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                    {sortedData.map((row, index) => (
+                        <tr key={row['Conversation Id'] || index} className="hover:bg-gray-50">
+                            {displayHeaders.map(header => (
+                                <td key={header} className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                                    {String(row[header] === undefined || row[header] === null ? '' : row[header])}
+                                </td>
+                            ))}
+                            {customMetricKeys.map(key => (
+                                <td key={key} className="px-6 py-4 whitespace-nowrap text-sm text-gray-700 bg-green-50">
+                                     {String(row[key] === undefined || row[key] === null ? '' : row[key])}
+                                </td>
+                            ))}
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+             {sortedData.length === 0 && (
+                <div className="text-center py-10 text-gray-500">
+                    <p>No conversations match the current filters.</p>
+                </div>
+            )}
+        </div>
+    );
+};
+
+export default App;
