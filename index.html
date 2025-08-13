@@ -91,6 +91,10 @@
         // --- RENDER FUNCTIONS ---
         
         function renderApp() {
+            if (state.isLoading) {
+                 appRoot.innerHTML = renderUploader();
+                 return;
+            }
             if (state.data.length === 0) {
                 appRoot.innerHTML = renderUploader();
                 setupUploaderEventListeners();
@@ -490,6 +494,12 @@
                     state.filters = {};
                     state.isLoading = false;
                     renderApp();
+                },
+                error: (err, file) => {
+                    console.error("Parsing Error:", err);
+                    state.isLoading = false;
+                    state.error = "Failed to parse the CSV file. Please ensure it is correctly formatted.";
+                    renderApp();
                 }
             });
         }
@@ -517,7 +527,8 @@
                 return;
             }
 
-            const allHeaders = [...state.headers.filter(h => h !== 'Custom Metrics'), ...state.customMetricKeys];
+            // To ensure all columns are present even if a row is missing a custom metric
+            const allHeaders = [...state.headers.filter(h => h !== 'Custom Metrics'), ...state.customMetricKeys].filter((value, index, self) => self.indexOf(value) === index);
             
             const csv = Papa.unparse({
                 fields: allHeaders,
