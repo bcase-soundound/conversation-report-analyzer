@@ -49,8 +49,7 @@
             uploadCloud: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M12 12v9"/><path d="m16 16-4-4-4 4"/></svg>`,
             file: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>`,
             x: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`,
-            chevronDown: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`,
-            chevronRight: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>`,
+            download: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>`,
             filter: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>`,
         };
 
@@ -137,8 +136,8 @@
             `;
 
             return `
-                <aside class="w-80 bg-white p-6 border-r border-gray-200 flex flex-col shadow-lg">
-                    <div class="flex-grow overflow-y-auto sidebar-scroll">
+                <aside class="w-80 bg-white p-6 border-r border-gray-200 flex flex-col shadow-lg" style="height: 100vh;">
+                    <div class="flex-grow overflow-y-auto sidebar-scroll pr-2">
                         <h2 class="text-2xl font-bold text-gray-800 mb-6 flex items-center"><span class="mr-2 text-blue-600">${icons.filter}</span>Filters</h2>
                         
                         <div class="space-y-6">
@@ -157,9 +156,15 @@
                             </div>` : ''}
                         </div>
                     </div>
-                    <button id="clear-filters-btn" class="w-full mt-4 py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold transition-colors flex-shrink-0">
-                        Clear All Filters
-                    </button>
+                    <div class="flex-shrink-0 pt-4 border-t mt-4 space-y-2">
+                         <button id="download-csv-btn" class="w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold transition-colors flex items-center justify-center">
+                            <span class="w-5 h-5 mr-2">${icons.download}</span>
+                            Download Filtered
+                        </button>
+                        <button id="clear-filters-btn" class="w-full py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold transition-colors">
+                            Clear All Filters
+                        </button>
+                    </div>
                 </aside>
             `;
         }
@@ -301,7 +306,8 @@
             const filterableColumns = ['Domain', 'Status', 'Channel', 'Escalated', 'Amelia Handled', 'Agent Handled', ...state.customMetricKeys];
             filterableColumns.forEach(header => {
                 const uniqueValues = [...new Set(state.data.map(row => row[header]).filter(val => val != null && val !== ''))];
-                if (uniqueValues.length > 1) {
+                // FIX: Changed from > 1 to > 0 to include filters with only one option
+                if (uniqueValues.length > 0) {
                     options[header] = uniqueValues.sort();
                 }
             });
@@ -339,13 +345,11 @@
                     state.headers = results.meta.fields;
                     const newCustomMetricKeys = new Set();
                     parsedData.forEach(row => {
-                        const customMetricsRaw = row['Custom Metrics'] || '';
-                        if (customMetricsRaw) {
-                            customMetricsRaw.split('||').forEach(metric => {
-                                const [key] = metric.split('=');
-                                if (key) newCustomMetricKeys.add(key.trim());
-                            });
-                        }
+                        Object.keys(row).forEach(key => {
+                            if (!state.headers.includes(key)) {
+                                newCustomMetricKeys.add(key);
+                            }
+                        });
                     });
                     state.customMetricKeys = Array.from(newCustomMetricKeys);
                     state.filters = {};
@@ -362,6 +366,32 @@
             state.fileName = '';
             state.error = '';
             renderApp();
+        }
+
+        function downloadFilteredCSV() {
+            const filteredData = getFilteredData();
+            if (filteredData.length === 0) {
+                alert("No data to download.");
+                return;
+            }
+
+            // To ensure all columns are present even if a row is missing a custom metric
+            const allHeaders = [...state.headers.filter(h => h !== 'Custom Metrics'), ...state.customMetricKeys];
+            
+            const csv = Papa.unparse({
+                fields: allHeaders,
+                data: filteredData
+            });
+
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", `filtered_${state.fileName}`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
         }
 
         // --- EVENT LISTENERS ---
@@ -423,6 +453,12 @@
                     state.filters = {};
                     renderApp();
                 });
+            }
+
+            // Download CSV button
+            const downloadBtn = document.getElementById('download-csv-btn');
+            if(downloadBtn) {
+                downloadBtn.addEventListener('click', downloadFilteredCSV);
             }
             
             // Sorting
