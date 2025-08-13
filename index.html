@@ -40,6 +40,18 @@
         .modal-container {
             transition: transform 0.3s ease;
         }
+        .loader {
+            border: 4px solid #f3f3f3; /* Light grey */
+            border-top: 4px solid #3498db; /* Blue */
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body class="bg-gray-100">
@@ -56,6 +68,7 @@
             filters: {},
             fileName: '',
             error: '',
+            isLoading: false, // New state for loading indicator
             isSidebarOpen: true,
             sortConfig: { key: null, direction: 'ascending' },
             mainChartInstance: null,
@@ -88,6 +101,14 @@
         }
 
         function renderUploader() {
+            if (state.isLoading) {
+                return `
+                    <div class="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4 text-center">
+                        <div class="loader"></div>
+                        <p class="text-lg font-semibold text-gray-700 mt-4">Processing your file...</p>
+                    </div>
+                `;
+            }
             return `
                 <div class="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4 text-center">
                     <div id="dropzone" class="w-full max-w-lg p-10 border-2 border-dashed rounded-xl cursor-pointer transition-colors border-gray-300 bg-white hover:bg-gray-100">
@@ -422,37 +443,52 @@
             }
             state.fileName = file.name;
             state.error = '';
+            state.isLoading = true;
+            renderApp(); // Show loader
+
+            const standardHeaders = new Set(['Conversation Id', 'Domain', 'Created', 'Ended', 'Finished', 'Status', 'Channel', 'Primary Agent Email', 'Primary Agent Handle Time', 'Primary Agent Answer Speed', 'Pickup SLA Violation', 'Escalated', 'Escalation Queue', 'Escalation Reason', 'Abandoned', 'Amelia Handled', 'Amelia Abandoned', 'Agent Handled', 'Agent Abandoned', 'Escalate Abandoned', 'Total Handle Time', 'Executed BPNs', 'User Name', 'User Email', 'User External Uid', 'Disconnect Wait Time', 'After Conversation Time', 'After Conversation Violation', 'Resolution Codes', 'Custom Metrics']);
 
             Papa.parse(file, {
                 header: true,
                 skipEmptyLines: true,
                 complete: (results) => {
-                    const parsedData = results.data.map(row => {
-                        const customMetricsRaw = row['Custom Metrics'] || '';
-                        const customMetrics = {};
-                        if (customMetricsRaw) {
-                            customMetricsRaw.split('||').forEach(metric => {
-                                const [key, value] = metric.split('=');
-                                if (key) {
-                                    customMetrics[key.trim()] = value ? value.trim() : null;
-                                }
-                            });
-                        }
-                        return { ...row, ...customMetrics };
-                    });
-
-                    state.data = parsedData;
-                    state.headers = results.meta.fields;
+                    let parsedData = results.data;
+                    const headersFromFile = results.meta.fields;
                     const newCustomMetricKeys = new Set();
-                    parsedData.forEach(row => {
-                        Object.keys(row).forEach(key => {
-                            if (!state.headers.includes(key)) {
-                                newCustomMetricKeys.add(key);
+
+                    // Check if we're dealing with the original format or a re-upload
+                    const isOriginalFormat = headersFromFile.includes('Custom Metrics');
+
+                    if (isOriginalFormat) {
+                        parsedData = results.data.map(row => {
+                            const customMetricsRaw = row['Custom Metrics'] || '';
+                            const customMetrics = {};
+                            if (customMetricsRaw) {
+                                customMetricsRaw.split('||').forEach(metric => {
+                                    const [key, value] = metric.split('=');
+                                    if (key) {
+                                        const trimmedKey = key.trim();
+                                        customMetrics[trimmedKey] = value ? value.trim() : null;
+                                        newCustomMetricKeys.add(trimmedKey);
+                                    }
+                                });
+                            }
+                            return { ...row, ...customMetrics };
+                        });
+                    } else {
+                        // This is a re-upload, identify custom metrics by exclusion
+                        headersFromFile.forEach(header => {
+                            if (!standardHeaders.has(header)) {
+                                newCustomMetricKeys.add(header);
                             }
                         });
-                    });
+                    }
+
+                    state.data = parsedData;
+                    state.headers = headersFromFile;
                     state.customMetricKeys = Array.from(newCustomMetricKeys);
                     state.filters = {};
+                    state.isLoading = false;
                     renderApp();
                 }
             });
@@ -470,6 +506,7 @@
             state.filters = {};
             state.fileName = '';
             state.error = '';
+            state.isLoading = false;
             renderApp();
         }
 
