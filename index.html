@@ -1,57 +1,323 @@
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
-// PapaParse will be loaded dynamically from a CDN.
-import { useDropzone } from 'react-dropzone';
-import { UploadCloud, File, X, ChevronDown, ChevronRight, Filter } from 'lucide-react';
-
-// Main App Component
-const App = () => {
-    const [data, setData] = useState([]);
-    const [headers, setHeaders] = useState([]);
-    const [customMetricKeys, setCustomMetricKeys] = useState([]);
-    const [filters, setFilters] = useState({});
-    const [fileName, setFileName] = useState('');
-    const [error, setError] = useState('');
-    const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-    const [isScriptLoaded, setIsScriptLoaded] = useState(false);
-
-    // Effect to dynamically load the PapaParse script
-    useEffect(() => {
-        if (window.Papa) {
-            setIsScriptLoaded(true);
-            return;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Conversation Report Analyzer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
         }
-        const script = document.createElement('script');
-        script.src = "https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js";
-        script.async = true;
-        script.onload = () => setIsScriptLoaded(true);
-        script.onerror = () => setError("Failed to load parsing library. Please check your connection and refresh.");
-        document.body.appendChild(script);
+        /* Custom scrollbar for filter sidebar */
+        .sidebar-scroll::-webkit-scrollbar {
+            width: 6px;
+        }
+        .sidebar-scroll::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        .sidebar-scroll::-webkit-scrollbar-thumb {
+            background: #94a3b8;
+            border-radius: 3px;
+        }
+        .sidebar-scroll::-webkit-scrollbar-thumb:hover {
+            background: #64748b;
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
 
-        return () => {
-            // Check if the script is still in the body before trying to remove it
-            if (document.body.contains(script)) {
-                 document.body.removeChild(script);
-            }
+    <div id="app-root"></div>
+
+    <script type="module">
+        // --- STATE MANAGEMENT ---
+        let state = {
+            data: [],
+            headers: [],
+            customMetricKeys: [],
+            filters: {},
+            fileName: '',
+            error: '',
+            isSidebarOpen: true,
+            sortConfig: { key: null, direction: 'ascending' },
         };
-    }, []);
 
+        // --- ICONS (as SVG strings to avoid external dependencies) ---
+        const icons = {
+            uploadCloud: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M12 12v9"/><path d="m16 16-4-4-4 4"/></svg>`,
+            file: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>`,
+            x: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`,
+            chevronDown: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`,
+            chevronRight: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>`,
+            filter: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>`,
+        };
 
-    const onDrop = useCallback((acceptedFiles) => {
-        if (!isScriptLoaded) {
-            setError("Parsing library is still loading. Please wait a moment and try again.");
-            return;
+        const appRoot = document.getElementById('app-root');
+
+        // --- RENDER FUNCTIONS ---
+        
+        /**
+         * Main render function, decides whether to show uploader or dashboard
+         */
+        function renderApp() {
+            if (state.data.length === 0) {
+                appRoot.innerHTML = renderUploader();
+                setupUploaderEventListeners();
+            } else {
+                appRoot.innerHTML = renderDashboard();
+                setupDashboardEventListeners();
+            }
         }
 
-        if (acceptedFiles.length > 0) {
-            const file = acceptedFiles[0];
+        /**
+         * Renders the initial file upload screen
+         */
+        function renderUploader() {
+            return `
+                <div class="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4 text-center">
+                    <div id="dropzone" class="w-full max-w-lg p-10 border-2 border-dashed rounded-xl cursor-pointer transition-colors border-gray-300 bg-white hover:bg-gray-100">
+                        <div class="flex flex-col items-center justify-center space-y-4 pointer-events-none">
+                            <div class="bg-blue-100 p-4 rounded-full">
+                                <span class="w-10 h-10 text-blue-600 inline-block">${icons.uploadCloud.replace('width="24"','width="40"').replace('height="24"','height="40"')}</span>
+                            </div>
+                            <p class="text-lg font-semibold text-gray-700">Drag & drop your CSV file here</p>
+                            <p class="text-sm text-gray-500">or</p>
+                            <button class="px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors">
+                                Browse files
+                            </button>
+                            <p class="text-xs text-gray-400 mt-2">Only *.csv files are accepted</p>
+                        </div>
+                    </div>
+                    ${state.error ? `<p class="text-red-500 mt-4">${state.error}</p>` : ''}
+                    <div class="mt-8 text-left max-w-lg w-full">
+                        <h3 class="text-xl font-bold text-gray-800 mb-2">Welcome to the Conversation Analyzer</h3>
+                        <p class="text-gray-600">This tool helps you process and analyze conversation reports. Simply upload your CSV file to get started.</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        /**
+         * Renders the main dashboard view with filters, summary, and table
+         */
+        function renderDashboard() {
+            const filteredData = getFilteredData();
+            return `
+                <div class="min-h-screen font-sans flex">
+                    ${state.isSidebarOpen ? renderSidebar(filteredData) : ''}
+                    <main class="flex-1 p-6 md:p-8 overflow-x-hidden">
+                        ${renderHeader()}
+                        ${renderSummaryPanel(filteredData)}
+                        <div class="mt-8 bg-white rounded-xl shadow-md overflow-hidden">
+                            ${renderDataTable(filteredData)}
+                        </div>
+                    </main>
+                </div>
+            `;
+        }
+
+        /**
+         * Renders the filter sidebar
+         */
+        function renderSidebar(filteredData) {
+            const options = getFilterOptions();
+            const standardKeys = Object.keys(options).filter(k => !state.customMetricKeys.includes(k));
+            const customKeys = state.customMetricKeys.filter(k => options[k]);
+
+            const renderSelect = (key) => `
+                <div key="${key}">
+                    <label class="block text-sm font-medium text-gray-600 mb-1">${key}</label>
+                    <select data-filter-key="${key}" class="w-full p-2 border border-gray-300 rounded-md bg-white shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                        <option value="">All</option>
+                        ${options[key]?.map(opt => `<option value="${opt}" ${state.filters[key] === opt ? 'selected' : ''}>${opt}</option>`).join('')}
+                    </select>
+                </div>
+            `;
+
+            return `
+                <aside class="w-80 bg-white p-6 border-r border-gray-200 flex flex-col shadow-lg">
+                    <div class="flex-grow overflow-y-auto sidebar-scroll">
+                        <h2 class="text-2xl font-bold text-gray-800 mb-6 flex items-center"><span class="mr-2 text-blue-600">${icons.filter}</span>Filters</h2>
+                        
+                        <div class="space-y-6">
+                            <div>
+                                <h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Standard Metrics</h3>
+                                <div class="space-y-4 pl-2 border-l-2 border-blue-200">
+                                    ${standardKeys.map(renderSelect).join('')}
+                                </div>
+                            </div>
+                            ${customKeys.length > 0 ? `
+                            <div>
+                                <h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Custom Metrics</h3>
+                                <div class="space-y-4 pl-2 border-l-2 border-green-200">
+                                    ${customKeys.map(renderSelect).join('')}
+                                </div>
+                            </div>` : ''}
+                        </div>
+                    </div>
+                    <button id="clear-filters-btn" class="w-full mt-4 py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold transition-colors flex-shrink-0">
+                        Clear All Filters
+                    </button>
+                </aside>
+            `;
+        }
+        
+        /**
+         * Renders the header section
+         */
+        function renderHeader() {
+            return `
+                <header class="flex justify-between items-center mb-6">
+                    <div class="flex items-center">
+                        <button id="toggle-sidebar-btn" class="p-2 rounded-md hover:bg-gray-200 mr-4">
+                            <span class="w-6 h-6 text-gray-600 inline-block">${state.isSidebarOpen ? icons.x : icons.filter}</span>
+                        </button>
+                        <div>
+                            <h1 class="text-3xl font-bold text-gray-800">Conversation Analysis</h1>
+                            <div class="flex items-center text-sm text-gray-500 mt-1">
+                                <span class="w-4 h-4 mr-2 inline-block">${icons.file}</span>
+                                <span>${state.fileName}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <button id="reset-app-btn" class="px-4 py-2 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600 transition-colors flex items-center">
+                        <span class="w-5 h-5 mr-2 inline-block">${icons.uploadCloud}</span> Upload New File
+                    </button>
+                </header>
+            `;
+        }
+
+        /**
+         * Renders the summary cards
+         */
+        function renderSummaryPanel(filteredData) {
+            const dates = state.data.map(row => new Date(row.Created)).filter(d => !isNaN(d));
+            const minDate = dates.length > 0 ? new Date(Math.min.apply(null, dates)) : null;
+            const maxDate = dates.length > 0 ? new Date(Math.max.apply(null, dates)) : null;
+            const timeRange = minDate && maxDate ? `${minDate.toLocaleDateString()} - ${maxDate.toLocaleDateString()}` : 'N/A';
+            const uniqueDomains = new Set(state.data.map(r => r.Domain)).size;
+
+            const summaryCard = (title, value) => `
+                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
+                    <h3 class="text-sm font-medium text-gray-500">${title}</h3>
+                    <p class="text-2xl font-bold text-gray-800 mt-1">${value}</p>
+                </div>
+            `;
+
+            return `
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    ${summaryCard('Time Range', timeRange)}
+                    ${summaryCard('Total Conversations', state.data.length.toLocaleString())}
+                    ${summaryCard('Filtered Conversations', filteredData.length.toLocaleString())}
+                    ${summaryCard('Unique Domains', uniqueDomains.toLocaleString())}
+                </div>
+            `;
+        }
+
+        /**
+         * Renders the data table
+         */
+        function renderDataTable(filteredData) {
+            const sortedData = getSortedData(filteredData);
+            const displayHeaders = state.headers.filter(h => h !== 'Custom Metrics');
+            
+            const getSortIndicator = (key) => {
+                if (state.sortConfig.key !== key) return '';
+                return state.sortConfig.direction === 'ascending' ? ' ▲' : ' ▼';
+            };
+
+            return `
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                ${displayHeaders.map(header => `
+                                    <th data-sort-key="${header}" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer whitespace-nowrap">
+                                        ${header}${getSortIndicator(header)}
+                                    </th>
+                                `).join('')}
+                                ${state.customMetricKeys.map(key => `
+                                    <th data-sort-key="${key}" class="px-6 py-3 text-left text-xs font-medium text-green-600 bg-green-50 uppercase tracking-wider cursor-pointer whitespace-nowrap">
+                                        ${key}${getSortIndicator(key)}
+                                    </th>
+                                `).join('')}
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            ${sortedData.length > 0 ? sortedData.map((row, index) => `
+                                <tr class="hover:bg-gray-50">
+                                    ${displayHeaders.map(header => `
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">${String(row[header] ?? '')}</td>
+                                    `).join('')}
+                                    ${state.customMetricKeys.map(key => `
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 bg-green-50">${String(row[key] ?? '')}</td>
+                                    `).join('')}
+                                </tr>
+                            `).join('') : `
+                                <tr>
+                                    <td colspan="${displayHeaders.length + state.customMetricKeys.length}" class="text-center py-10 text-gray-500">
+                                        No conversations match the current filters.
+                                    </td>
+                                </tr>
+                            `}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+
+        // --- LOGIC & DATA HANDLING ---
+
+        function getFilteredData() {
+            return state.data.filter(row => {
+                return Object.entries(state.filters).every(([key, value]) => {
+                    if (value === '') return true;
+                    return String(row[key]) === String(value);
+                });
+            });
+        }
+        
+        function getSortedData(data) {
+            let sortableData = [...data];
+            const { key, direction } = state.sortConfig;
+            if (key !== null) {
+                sortableData.sort((a, b) => {
+                    const valA = a[key];
+                    const valB = b[key];
+                    if (valA < valB) return direction === 'ascending' ? -1 : 1;
+                    if (valA > valB) return direction === 'ascending' ? 1 : -1;
+                    return 0;
+                });
+            }
+            return sortableData;
+        }
+
+        function getFilterOptions() {
+            if (state.data.length === 0) return {};
+            const options = {};
+            const filterableColumns = ['Domain', 'Status', 'Channel', 'Escalated', 'Amelia Handled', 'Agent Handled', ...state.customMetricKeys];
+            filterableColumns.forEach(header => {
+                const uniqueValues = [...new Set(state.data.map(row => row[header]).filter(val => val != null && val !== ''))];
+                if (uniqueValues.length > 1) {
+                    options[header] = uniqueValues.sort();
+                }
+            });
+            return options;
+        }
+
+        function handleFile(file) {
             if (file.type !== 'text/csv') {
-                setError('Invalid file type. Please upload a CSV file.');
+                state.error = 'Invalid file type. Please upload a CSV file.';
+                renderApp();
                 return;
             }
-            setFileName(file.name);
-            setError('');
+            state.fileName = file.name;
+            state.error = '';
 
-            window.Papa.parse(file, {
+            Papa.parse(file, {
                 header: true,
                 skipEmptyLines: true,
                 complete: (results) => {
@@ -69,329 +335,113 @@ const App = () => {
                         return { ...row, ...customMetrics };
                     });
 
-                    setData(parsedData);
-                    const allHeaders = results.meta.fields;
+                    state.data = parsedData;
+                    state.headers = results.meta.fields;
                     const newCustomMetricKeys = new Set();
                     parsedData.forEach(row => {
-                         const customMetricsRaw = row['Custom Metrics'] || '';
-                         if (customMetricsRaw) {
+                        const customMetricsRaw = row['Custom Metrics'] || '';
+                        if (customMetricsRaw) {
                             customMetricsRaw.split('||').forEach(metric => {
                                 const [key] = metric.split('=');
-                                if(key) newCustomMetricKeys.add(key.trim());
+                                if (key) newCustomMetricKeys.add(key.trim());
                             });
-                         }
+                        }
                     });
-                    
-                    setHeaders(allHeaders);
-                    setCustomMetricKeys(Array.from(newCustomMetricKeys));
-                    setFilters({});
+                    state.customMetricKeys = Array.from(newCustomMetricKeys);
+                    state.filters = {};
+                    renderApp();
                 }
             });
         }
-    }, [isScriptLoaded]);
-
-    const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, disabled: !isScriptLoaded });
-
-    const filterOptions = useMemo(() => {
-        if (data.length === 0) return {};
-        const options = {};
-        const filterableColumns = ['Domain', 'Status', 'Channel', 'Escalated', 'Amelia Handled', 'Agent Handled', ...customMetricKeys];
-        filterableColumns.forEach(header => {
-            const uniqueValues = [...new Set(data.map(row => row[header]).filter(val => val !== undefined && val !== null && val !== ''))];
-            if (uniqueValues.length > 1) {
-                 options[header] = uniqueValues.sort();
-            }
-        });
-        return options;
-    }, [data, customMetricKeys]);
-
-    const filteredData = useMemo(() => {
-        return data.filter(row => {
-            return Object.entries(filters).every(([key, value]) => {
-                if (value === '') return true;
-                return String(row[key]) === String(value);
-            });
-        });
-    }, [data, filters]);
-
-    const handleFilterChange = (key, value) => {
-        setFilters(prev => ({ ...prev, [key]: value }));
-    };
-    
-    const clearFilters = () => {
-        setFilters({});
-    };
-
-    const resetApp = () => {
-        setData([]);
-        setHeaders([]);
-        setCustomMetricKeys([]);
-        setFilters({});
-        setFileName('');
-        setError('');
-    };
-
-    if (data.length === 0) {
-        return (
-            <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4 text-center">
-                <div 
-                    {...getRootProps()} 
-                    className={`w-full max-w-lg p-10 border-2 border-dashed rounded-xl transition-colors ${isScriptLoaded ? 'cursor-pointer' : 'cursor-wait'} ${isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-100'}`}
-                >
-                    <input {...getInputProps()} />
-                    <div className="flex flex-col items-center justify-center space-y-4">
-                        <div className="bg-blue-100 p-4 rounded-full">
-                            <UploadCloud className="w-10 h-10 text-blue-600" />
-                        </div>
-                        <p className="text-lg font-semibold text-gray-700">{isScriptLoaded ? 'Drag & drop your CSV file here' : 'Loading analysis tools...'}</p>
-                        <p className="text-sm text-gray-500">or</p>
-                        <button disabled={!isScriptLoaded} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed">
-                            Browse files
-                        </button>
-                         <p className="text-xs text-gray-400 mt-2">Only *.csv files are accepted</p>
-                    </div>
-                </div>
-                {error && <p className="text-red-500 mt-4">{error}</p>}
-                 <div className="mt-8 text-left max-w-lg w-full">
-                    <h3 className="text-xl font-bold text-gray-800 mb-2">Welcome to the Conversation Analyzer</h3>
-                    <p className="text-gray-600">This tool helps you process and analyze conversation reports. Simply upload your CSV file to get started. The application will automatically:</p>
-                    <ul className="list-disc list-inside mt-2 text-gray-600 space-y-1">
-                        <li>Parse and display your conversation data.</li>
-                        <li>Provide a summary of key metrics.</li>
-                        <li>Unpack the 'Custom Metrics' column into filterable fields.</li>
-                        <li>Allow you to filter and explore your data dynamically.</li>
-                    </ul>
-                </div>
-            </div>
-        );
-    }
-
-    return (
-        <div className="min-h-screen bg-gray-100 font-sans flex">
-            {isSidebarOpen && (
-                <aside className="w-80 bg-white p-6 border-r border-gray-200 flex flex-col shadow-lg">
-                    <div className="flex-grow overflow-y-auto">
-                        <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center"><Filter className="mr-2 text-blue-600"/>Filters</h2>
-                        <FilterControls filters={filters} options={filterOptions} onChange={handleFilterChange} customMetricKeys={customMetricKeys} />
-                    </div>
-                    <button onClick={clearFilters} className="w-full mt-4 py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold transition-colors flex-shrink-0">
-                        Clear All Filters
-                    </button>
-                </aside>
-            )}
-
-            <main className="flex-1 p-6 md:p-8">
-                <header className="flex justify-between items-center mb-6">
-                    <div className="flex items-center">
-                         <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 rounded-md hover:bg-gray-200 mr-4">
-                            {isSidebarOpen ? <X className="w-6 h-6 text-gray-600" /> : <Filter className="w-6 h-6 text-gray-600" />}
-                        </button>
-                        <div>
-                            <h1 className="text-3xl font-bold text-gray-800">Conversation Analysis</h1>
-                            <div className="flex items-center text-sm text-gray-500 mt-1">
-                                <File className="w-4 h-4 mr-2" />
-                                <span>{fileName}</span>
-                            </div>
-                        </div>
-                    </div>
-                    <button onClick={resetApp} className="px-4 py-2 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600 transition-colors flex items-center">
-                        <UploadCloud className="w-5 h-5 mr-2"/> Upload New File
-                    </button>
-                </header>
-
-                <SummaryPanel data={filteredData} allData={data} />
-                
-                <div className="mt-8 bg-white rounded-xl shadow-md overflow-hidden">
-                    <DataTable data={filteredData} headers={headers} customMetricKeys={customMetricKeys} />
-                </div>
-            </main>
-        </div>
-    );
-};
-
-// Filter Controls Component
-const FilterControls = ({ filters, options, onChange, customMetricKeys = [] }) => {
-    const [openSections, setOpenSections] = useState({ standard: true, custom: true });
-
-    const toggleSection = (section) => {
-        setOpenSections(prev => ({ ...prev, [section]: !prev[section] }));
-    };
-
-    const standardFilterKeys = Object.keys(options).filter(key => !customMetricKeys.includes(key));
-
-    return (
-        <div className="space-y-6">
-            <div>
-                <button onClick={() => toggleSection('standard')} className="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">
-                    Standard Metrics
-                    {openSections.standard ? <ChevronDown /> : <ChevronRight />}
-                </button>
-                {openSections.standard && (
-                    <div className="space-y-4 pl-2 border-l-2 border-blue-200">
-                        {standardFilterKeys.map(key => (
-                            <div key={key}>
-                                <label className="block text-sm font-medium text-gray-600 mb-1">{key}</label>
-                                <select
-                                    value={filters[key] || ''}
-                                    onChange={(e) => onChange(key, e.target.value)}
-                                    className="w-full p-2 border border-gray-300 rounded-md bg-white shadow-sm focus:ring-blue-500 focus:border-blue-500"
-                                >
-                                    <option value="">All</option>
-                                    {options[key]?.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                                </select>
-                            </div>
-                        ))}
-                    </div>
-                )}
-            </div>
-            {customMetricKeys.length > 0 && (
-                 <div>
-                    <button onClick={() => toggleSection('custom')} className="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">
-                        Custom Metrics
-                        {openSections.custom ? <ChevronDown /> : <ChevronRight />}
-                    </button>
-                    {openSections.custom && (
-                         <div className="space-y-4 pl-2 border-l-2 border-green-200">
-                            {customMetricKeys.map(key => (
-                                <div key={key}>
-                                    <label className="block text-sm font-medium text-gray-600 mb-1">{key}</label>
-                                    <select
-                                        value={filters[key] || ''}
-                                        onChange={(e) => onChange(key, e.target.value)}
-                                        className="w-full p-2 border border-gray-300 rounded-md bg-white shadow-sm focus:ring-blue-500 focus:border-blue-500"
-                                    >
-                                        <option value="">All</option>
-                                        {options[key]?.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                                    </select>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            )}
-        </div>
-    );
-};
-
-// Summary Panel Component
-const SummaryPanel = ({ data, allData }) => {
-    const summary = useMemo(() => {
-        if (allData.length === 0) return { timeRange: 'N/A', totalConversations: 0, uniqueDomains: 0, filteredConversations: 0 };
-
-        const dates = allData.map(row => new Date(row.Created)).filter(d => !isNaN(d));
-        const minDate = dates.length > 0 ? new Date(Math.min.apply(null, dates)) : null;
-        const maxDate = dates.length > 0 ? new Date(Math.max.apply(null, dates)) : null;
-
-        const timeRange = minDate && maxDate 
-            ? `${minDate.toLocaleDateString()} - ${maxDate.toLocaleDateString()}`
-            : 'N/A';
         
-        const uniqueDomains = new Set(allData.map(r => r.Domain)).size;
+        function resetApp() {
+            state.data = [];
+            state.headers = [];
+            state.customMetricKeys = [];
+            state.filters = {};
+            state.fileName = '';
+            state.error = '';
+            renderApp();
+        }
 
-        return {
-            timeRange,
-            totalConversations: allData.length,
-            filteredConversations: data.length,
-            uniqueDomains
-        };
-    }, [data, allData]);
+        // --- EVENT LISTENERS ---
 
-    return (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <SummaryCard title="Time Range" value={summary.timeRange} />
-            <SummaryCard title="Total Conversations" value={summary.totalConversations.toLocaleString()} />
-            <SummaryCard title="Filtered Conversations" value={summary.filteredConversations.toLocaleString()} />
-            <SummaryCard title="Unique Domains" value={summary.uniqueDomains.toLocaleString()} />
-        </div>
-    );
-};
+        function setupUploaderEventListeners() {
+            const dropzone = document.getElementById('dropzone');
+            const fileInput = document.createElement('input');
+            fileInput.type = 'file';
+            fileInput.accept = '.csv';
 
-const SummaryCard = ({ title, value }) => (
-    <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
-        <h3 className="text-sm font-medium text-gray-500">{title}</h3>
-        <p className="text-2xl font-bold text-gray-800 mt-1">{value}</p>
-    </div>
-);
-
-
-// Data Table Component
-const DataTable = ({ data, headers, customMetricKeys }) => {
-    const [sortConfig, setSortConfig] = useState({ key: null, direction: 'ascending' });
-
-    const sortedData = useMemo(() => {
-        let sortableData = [...data];
-        if (sortConfig.key !== null) {
-            sortableData.sort((a, b) => {
-                const valA = a[sortConfig.key];
-                const valB = b[sortConfig.key];
-                if (valA < valB) {
-                    return sortConfig.direction === 'ascending' ? -1 : 1;
+            dropzone.addEventListener('click', () => fileInput.click());
+            fileInput.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) {
+                    handleFile(e.target.files[0]);
                 }
-                if (valA > valB) {
-                    return sortConfig.direction === 'ascending' ? 1 : -1;
+            });
+
+            dropzone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropzone.classList.add('border-blue-500', 'bg-blue-50');
+            });
+            dropzone.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                dropzone.classList.remove('border-blue-500', 'bg-blue-50');
+            });
+            dropzone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropzone.classList.remove('border-blue-500', 'bg-blue-50');
+                if (e.dataTransfer.files.length > 0) {
+                    handleFile(e.dataTransfer.files[0]);
                 }
-                return 0;
             });
         }
-        return sortableData;
-    }, [data, sortConfig]);
 
-    const requestSort = (key) => {
-        let direction = 'ascending';
-        if (sortConfig.key === key && sortConfig.direction === 'ascending') {
-            direction = 'descending';
+        function setupDashboardEventListeners() {
+            // Sidebar toggle
+            document.getElementById('toggle-sidebar-btn').addEventListener('click', () => {
+                state.isSidebarOpen = !state.isSidebarOpen;
+                renderApp();
+            });
+
+            // Reset button
+            document.getElementById('reset-app-btn').addEventListener('click', resetApp);
+            
+            // Filter controls
+            document.querySelectorAll('[data-filter-key]').forEach(select => {
+                select.addEventListener('change', (e) => {
+                    const key = e.target.dataset.filterKey;
+                    const value = e.target.value;
+                    state.filters[key] = value;
+                    renderApp();
+                });
+            });
+
+            // Clear filters button
+            const clearFiltersBtn = document.getElementById('clear-filters-btn');
+            if(clearFiltersBtn) {
+                clearFiltersBtn.addEventListener('click', () => {
+                    state.filters = {};
+                    renderApp();
+                });
+            }
+            
+            // Sorting
+            document.querySelectorAll('[data-sort-key]').forEach(th => {
+                th.addEventListener('click', (e) => {
+                    const key = e.currentTarget.dataset.sortKey;
+                    let direction = 'ascending';
+                    if(state.sortConfig.key === key && state.sortConfig.direction === 'ascending') {
+                        direction = 'descending';
+                    }
+                    state.sortConfig = { key, direction };
+                    renderApp();
+                });
+            });
         }
-        setSortConfig({ key, direction });
-    };
 
-    const getSortIndicator = (key) => {
-        if (sortConfig.key !== key) return null;
-        return sortConfig.direction === 'ascending' ? ' ▲' : ' ▼';
-    };
-    
-    const displayHeaders = headers.filter(h => h !== 'Custom Metrics');
+        // --- INITIAL RENDER ---
+        renderApp();
 
-    return (
-        <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                    <tr>
-                        {displayHeaders.map(header => (
-                            <th key={header} onClick={() => requestSort(header)} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer whitespace-nowrap">
-                                {header}{getSortIndicator(header)}
-                            </th>
-                        ))}
-                        {customMetricKeys.map(key => (
-                             <th key={key} onClick={() => requestSort(key)} className="px-6 py-3 text-left text-xs font-medium text-green-600 bg-green-50 uppercase tracking-wider cursor-pointer whitespace-nowrap">
-                                {key}{getSortIndicator(key)}
-                            </th>
-                        ))}
-                    </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                    {sortedData.map((row, index) => (
-                        <tr key={row['Conversation Id'] || index} className="hover:bg-gray-50">
-                            {displayHeaders.map(header => (
-                                <td key={header} className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                                    {String(row[header] === undefined || row[header] === null ? '' : row[header])}
-                                </td>
-                            ))}
-                            {customMetricKeys.map(key => (
-                                <td key={key} className="px-6 py-4 whitespace-nowrap text-sm text-gray-700 bg-green-50">
-                                     {String(row[key] === undefined || row[key] === null ? '' : row[key])}
-                                </td>
-                            ))}
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
-             {sortedData.length === 0 && (
-                <div className="text-center py-10 text-gray-500">
-                    <p>No conversations match the current filters.</p>
-                </div>
-            )}
-        </div>
-    );
-};
-
-export default App;
+    </script>
+</body>
+</html>
