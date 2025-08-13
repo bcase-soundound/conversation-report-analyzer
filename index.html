@@ -106,10 +106,10 @@
             return `
                 <div class="min-h-screen font-sans flex">
                     ${state.isSidebarOpen ? renderSidebar(filteredData) : ''}
-                    <main class="flex-1 p-6 md:p-8 overflow-x-hidden">
+                    <main class="flex-1 p-6 md:p-8 overflow-y-hidden flex flex-col">
                         ${renderHeader()}
                         ${renderSummaryPanel(filteredData)}
-                        <div class="mt-8 bg-white rounded-xl shadow-md overflow-hidden">
+                        <div class="mt-8 bg-white rounded-xl shadow-md overflow-hidden flex-grow">
                             ${renderDataTable(filteredData)}
                         </div>
                     </main>
@@ -174,7 +174,7 @@
          */
         function renderHeader() {
             return `
-                <header class="flex justify-between items-center mb-6">
+                <header class="flex justify-between items-center mb-6 flex-shrink-0">
                     <div class="flex items-center">
                         <button id="toggle-sidebar-btn" class="p-2 rounded-md hover:bg-gray-200 mr-4">
                             <span class="w-6 h-6 text-gray-600 inline-block">${state.isSidebarOpen ? icons.x : icons.filter}</span>
@@ -198,7 +198,7 @@
          * Renders the summary cards
          */
         function renderSummaryPanel(filteredData) {
-            const dates = state.data.map(row => new Date(row.Created)).filter(d => !isNaN(d));
+            const dates = state.data.map(row => parseDate(row.Created)).filter(d => d);
             const minDate = dates.length > 0 ? new Date(Math.min.apply(null, dates)) : null;
             const maxDate = dates.length > 0 ? new Date(Math.max.apply(null, dates)) : null;
             const timeRange = minDate && maxDate ? `${minDate.toLocaleDateString()} - ${maxDate.toLocaleDateString()}` : 'N/A';
@@ -212,7 +212,7 @@
             `;
 
             return `
-                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 flex-shrink-0">
                     ${summaryCard('Time Range', timeRange)}
                     ${summaryCard('Total Conversations', state.data.length.toLocaleString())}
                     ${summaryCard('Filtered Conversations', filteredData.length.toLocaleString())}
@@ -233,10 +233,12 @@
                 return state.sortConfig.direction === 'ascending' ? ' ▲' : ' ▼';
             };
 
+            // FIX: This container is now a scrollable pane for the table.
+            // The `thead` is sticky to keep headers visible on vertical scroll.
             return `
-                <div class="overflow-x-auto">
+                <div class="h-full overflow-auto">
                     <table class="min-w-full divide-y divide-gray-200">
-                        <thead class="bg-gray-50">
+                        <thead class="bg-gray-50 sticky top-0 z-10">
                             <tr>
                                 ${displayHeaders.map(header => `
                                     <th data-sort-key="${header}" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer whitespace-nowrap">
@@ -276,6 +278,20 @@
 
         // --- LOGIC & DATA HANDLING ---
 
+        /**
+         * Parses a date string that may contain a timezone in brackets.
+         * e.g., "2025-08-11T06:56:53.272-04:00[America/New_York]"
+         * @param {string} dateString The date string to parse.
+         * @returns {Date|null} A Date object or null if invalid.
+         */
+        function parseDate(dateString) {
+            if (!dateString) return null;
+            // Remove the timezone in brackets, e.g., [America/New_York]
+            const cleanDateString = dateString.replace(/\[.*\]/, '');
+            const date = new Date(cleanDateString);
+            return isNaN(date) ? null : date;
+        }
+
         function getFilteredData() {
             return state.data.filter(row => {
                 return Object.entries(state.filters).every(([key, value]) => {
@@ -306,7 +322,6 @@
             const filterableColumns = ['Domain', 'Status', 'Channel', 'Escalated', 'Amelia Handled', 'Agent Handled', ...state.customMetricKeys];
             filterableColumns.forEach(header => {
                 const uniqueValues = [...new Set(state.data.map(row => row[header]).filter(val => val != null && val !== ''))];
-                // FIX: Changed from > 1 to > 0 to include filters with only one option
                 if (uniqueValues.length > 0) {
                     options[header] = uniqueValues.sort();
                 }
@@ -375,7 +390,6 @@
                 return;
             }
 
-            // To ensure all columns are present even if a row is missing a custom metric
             const allHeaders = [...state.headers.filter(h => h !== 'Custom Metrics'), ...state.customMetricKeys];
             
             const csv = Papa.unparse({
@@ -427,16 +441,13 @@
         }
 
         function setupDashboardEventListeners() {
-            // Sidebar toggle
             document.getElementById('toggle-sidebar-btn').addEventListener('click', () => {
                 state.isSidebarOpen = !state.isSidebarOpen;
                 renderApp();
             });
 
-            // Reset button
             document.getElementById('reset-app-btn').addEventListener('click', resetApp);
             
-            // Filter controls
             document.querySelectorAll('[data-filter-key]').forEach(select => {
                 select.addEventListener('change', (e) => {
                     const key = e.target.dataset.filterKey;
@@ -446,7 +457,6 @@
                 });
             });
 
-            // Clear filters button
             const clearFiltersBtn = document.getElementById('clear-filters-btn');
             if(clearFiltersBtn) {
                 clearFiltersBtn.addEventListener('click', () => {
@@ -455,13 +465,11 @@
                 });
             }
 
-            // Download CSV button
             const downloadBtn = document.getElementById('download-csv-btn');
             if(downloadBtn) {
                 downloadBtn.addEventListener('click', downloadFilteredCSV);
             }
             
-            // Sorting
             document.querySelectorAll('[data-sort-key]').forEach(th => {
                 th.addEventListener('click', (e) => {
                     const key = e.currentTarget.dataset.sortKey;
