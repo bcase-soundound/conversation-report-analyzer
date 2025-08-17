@@ -7,6 +7,9 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body {
@@ -63,19 +66,28 @@
         // --- STATE MANAGEMENT ---
         let state = {
             data: [],
+            filteredData: [], // Memoized filtered data
             headers: [],
             customMetricKeys: [],
+            summaryStats: { timeRange: 'N/A', uniqueDomains: 0 }, // Pre-calculated stats
             filters: {},
             fileName: '',
             error: '',
-            isLoading: false, // New state for loading indicator
+            isLoading: false,
             isSidebarOpen: true,
             sortConfig: { key: null, direction: 'ascending' },
+            pagination: { currentPage: 1, rowsPerPage: 100 },
             mainChartInstance: null,
-            analysisChartInstances: {},
+            consumptionAnalysisState: { // State for the new modal
+                dailyChart: null,
+                weeklyChart: null,
+                containmentChart: null,
+                handleTimeChart: null,
+                originalData: [],
+            },
         };
 
-        // --- ICONS (as SVG strings to avoid external dependencies) ---
+        // --- ICONS ---
         const icons = {
             uploadCloud: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M12 12v9"/><path d="m16 16-4-4-4 4"/></svg>`,
             file: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>`,
@@ -83,12 +95,15 @@
             download: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>`,
             filter: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>`,
             search: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>`,
+            chevronDown: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`,
+            chevronRight: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>`,
         };
 
         const appRoot = document.getElementById('app-root');
         const modalRoot = document.getElementById('modal-root');
+        let fileParserWorker;
 
-        // --- RENDER FUNCTIONS ---
+        // --- RENDER & UPDATE FUNCTIONS ---
         
         function renderApp() {
             if (state.isLoading) {
@@ -103,327 +118,130 @@
                 setupDashboardEventListeners();
             }
         }
+        
+        // OPTIMIZED: This function now only updates the necessary parts of the UI
+        function updateUI() {
+            updateSummaryPanel();
+            updateMainChart();
+            updateDataTable();
+            updateSidebarButtons();
+            updateHeader();
+        }
 
         function renderUploader() {
             if (state.isLoading) {
-                return `
-                    <div class="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4 text-center">
-                        <div class="loader"></div>
-                        <p class="text-lg font-semibold text-gray-700 mt-4">Processing your file...</p>
-                    </div>
-                `;
+                return `<div class="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4 text-center"><div class="loader"></div><p class="text-lg font-semibold text-gray-700 mt-4">Processing your file...</p></div>`;
             }
-            return `
-                <div class="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4 text-center">
-                    <div id="dropzone" class="w-full max-w-lg p-10 border-2 border-dashed rounded-xl cursor-pointer transition-colors border-gray-300 bg-white hover:bg-gray-100">
-                        <div class="flex flex-col items-center justify-center space-y-4 pointer-events-none">
-                            <div class="bg-blue-100 p-4 rounded-full">
-                                <span class="w-10 h-10 text-blue-600 inline-block">${icons.uploadCloud.replace('width="24"','width="40"').replace('height="24"','height="40"')}</span>
-                            </div>
-                            <p class="text-lg font-semibold text-gray-700">Drag & drop your CSV file here</p>
-                            <p class="text-sm text-gray-500">or</p>
-                            <button class="px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors">
-                                Browse files
-                            </button>
-                            <p class="text-xs text-gray-400 mt-2">Only *.csv files are accepted</p>
-                        </div>
-                    </div>
-                    ${state.error ? `<p class="text-red-500 mt-4">${state.error}</p>` : ''}
-                    <div class="mt-8 text-left max-w-lg w-full">
-                        <h3 class="text-xl font-bold text-gray-800 mb-2">Welcome to the Conversation Analyzer</h3>
-                        <p class="text-gray-600">This tool helps you process and analyze conversation reports. Simply upload your CSV file to get started.</p>
-                    </div>
-                </div>
-            `;
+            return `<div class="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4 text-center"><div id="dropzone" class="w-full max-w-lg p-10 border-2 border-dashed rounded-xl cursor-pointer transition-colors border-gray-300 bg-white hover:bg-gray-100"><div class="flex flex-col items-center justify-center space-y-4 pointer-events-none"><div class="bg-blue-100 p-4 rounded-full"><span class="w-10 h-10 text-blue-600 inline-block">${icons.uploadCloud.replace('width="24"','width="40"').replace('height="24"','height="40"')}</span></div><p class="text-lg font-semibold text-gray-700">Drag & drop your CSV file here</p><p class="text-sm text-gray-500">or</p><button class="px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors">Browse files</button><p class="text-xs text-gray-400 mt-2">Only *.csv files are accepted</p></div></div>${state.error ? `<p class="text-red-500 mt-4">${state.error}</p>` : ''}<div class="mt-8 text-left max-w-lg w-full"><h3 class="text-xl font-bold text-gray-800 mb-2">Welcome to the Conversation Analyzer</h3><p class="text-gray-600">This tool helps you process and analyze conversation reports. Simply upload your CSV file to get started.</p></div></div>`;
         }
 
         function renderDashboard() {
-            const filteredData = getFilteredData();
-            return `
-                <div class="min-h-screen font-sans flex">
-                    ${state.isSidebarOpen ? renderSidebar(filteredData) : ''}
-                    <main class="flex-1 p-6 md:p-8 main-content">
-                        ${renderHeader()}
-                        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-shrink-0">
-                            <div class="lg:col-span-2">
-                                ${renderSummaryPanel(filteredData)}
-                            </div>
-                            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
-                                ${renderMainChart(filteredData)}
-                            </div>
-                        </div>
-                        <div class="mt-6 bg-white rounded-xl shadow-md flex-grow flex flex-col overflow-hidden">
-                            ${renderDataTable(filteredData)}
-                        </div>
-                    </main>
-                </div>
-            `;
+            return `<div class="min-h-screen font-sans flex">${renderSidebar()}<main class="flex-1 p-6 md:p-8 main-content">${renderHeader()}<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-shrink-0"><div class="lg:col-span-2">${renderSummaryPanel()}</div><div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200">${renderMainChart()}</div></div><div class="mt-6 bg-white rounded-xl shadow-md flex-grow flex flex-col overflow-hidden">${renderDataTable()}</div></main></div>`;
         }
 
-        function renderSidebar(filteredData) {
+        function renderSidebar() {
             const options = getFilterOptions();
             const standardKeys = Object.keys(options).filter(k => !state.customMetricKeys.includes(k));
             const customKeys = state.customMetricKeys.filter(k => options[k]);
-            const hasActiveFilters = Object.values(state.filters).some(v => v !== '');
+            
+            const renderMultiSelect = (key, values) => {
+                const selectedValues = state.filters[key] || [];
+                const optionsHTML = values.map(val => `
+                    <label class="flex items-center space-x-2 cursor-pointer p-1 rounded hover:bg-gray-100">
+                        <input type="checkbox" data-filter-key="${key}" value="${val}" ${selectedValues.includes(val) ? 'checked' : ''} class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                        <span class="text-sm text-gray-700">${val}</span>
+                    </label>
+                `).join('');
+                return `<div class="pl-2 mt-1 space-y-1 max-h-48 overflow-y-auto pr-2 hidden">${optionsHTML}</div>`;
+            };
 
-            const renderSelect = (key) => `
-                <div key="${key}">
-                    <label class="block text-sm font-medium text-gray-600 mb-1">${key}</label>
-                    <select data-filter-key="${key}" class="w-full p-2 border border-gray-300 rounded-md bg-white shadow-sm focus:ring-blue-500 focus:border-blue-500">
-                        <option value="">All</option>
-                        ${options[key]?.map(opt => `<option value="${opt}" ${state.filters[key] === opt ? 'selected' : ''}>${opt}</option>`).join('')}
-                    </select>
+            const renderFilterGroup = (key, values) => `
+                <div>
+                    <div data-collapsible-key="${key}" class="flex justify-between items-center cursor-pointer p-1 rounded hover:bg-gray-100">
+                        <label class="block text-sm font-medium text-gray-600 pointer-events-none">${key}</label>
+                        <span class="collapse-icon text-gray-500">${icons.chevronRight}</span>
+                    </div>
+                    ${renderMultiSelect(key, values)}
                 </div>
             `;
 
-            return `
-                <aside class="w-80 bg-white p-6 border-r border-gray-200 flex flex-col shadow-lg" style="height: 100vh;">
-                    <div class="flex-grow overflow-y-auto sidebar-scroll pr-2">
-                        <h2 class="text-2xl font-bold text-gray-800 mb-6 flex items-center"><span class="mr-2 text-blue-600">${icons.filter}</span>Filters</h2>
-                        
-                        <div class="space-y-6">
-                            <div>
-                                <h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Standard Metrics</h3>
-                                <div class="space-y-4 pl-2 border-l-2 border-blue-200">
-                                    ${standardKeys.map(renderSelect).join('')}
-                                </div>
-                            </div>
-                            ${customKeys.length > 0 ? `
-                            <div>
-                                <h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Custom Metrics</h3>
-                                <div class="space-y-4 pl-2 border-l-2 border-green-200">
-                                    ${customKeys.map(renderSelect).join('')}
-                                </div>
-                            </div>` : ''}
-                        </div>
-                    </div>
-                    <div class="flex-shrink-0 pt-4 border-t mt-4 space-y-2">
-                         <button id="deeper-analysis-btn" class="w-full py-2 px-4 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold transition-colors flex items-center justify-center ${!hasActiveFilters ? 'opacity-50 cursor-not-allowed' : ''}" ${!hasActiveFilters ? 'disabled' : ''}>
-                            <span class="w-5 h-5 mr-2">${icons.search}</span>
-                            Deeper Analysis
-                        </button>
-                         <button id="download-csv-btn" class="w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold transition-colors flex items-center justify-center">
-                            <span class="w-5 h-5 mr-2">${icons.download}</span>
-                            Download Filtered
-                        </button>
-                        <button id="clear-filters-btn" class="w-full py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold transition-colors">
-                            Clear All Filters
-                        </button>
-                    </div>
-                </aside>
-            `;
+            return `<aside id="sidebar" class="w-80 bg-white p-6 border-r border-gray-200 flex-col shadow-lg ${state.isSidebarOpen ? 'flex' : 'hidden'}" style="height: 100vh;"><div class="flex-grow overflow-y-auto sidebar-scroll pr-2"><h2 class="text-2xl font-bold text-gray-800 mb-6 flex items-center"><span class="mr-2 text-blue-600">${icons.filter}</span>Filters</h2><div class="space-y-6"><div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Standard Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-blue-200">${standardKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>${customKeys.length > 0 ? `<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Custom Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-green-200">${customKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>` : ''}</div></div><div class="flex-shrink-0 pt-4 border-t mt-4 space-y-2"><button id="deeper-analysis-btn" class="w-full py-2 px-4 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold transition-colors flex items-center justify-center"><span class="w-5 h-5 mr-2">${icons.search}</span>Deeper Analysis</button><button id="download-csv-btn" class="w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold transition-colors flex items-center justify-center"><span class="w-5 h-5 mr-2">${icons.download}</span>Download Filtered</button><button id="clear-filters-btn" class="w-full py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold transition-colors">Clear All Filters</button></div></aside>`;
         }
         
         function renderHeader() {
-            const activeFilters = Object.entries(state.filters).filter(([key, value]) => value !== '');
-            return `
-                <div class="flex-shrink-0">
-                    <header class="flex justify-between items-center mb-6">
-                        <div class="flex items-center">
-                            <button id="toggle-sidebar-btn" class="p-2 rounded-md hover:bg-gray-200 mr-4">
-                                <span class="w-6 h-6 text-gray-600 inline-block">${state.isSidebarOpen ? icons.x : icons.filter}</span>
-                            </button>
-                            <div>
-                                <h1 class="text-3xl font-bold text-gray-800">Conversation Analysis</h1>
-                                <div class="flex items-center text-sm text-gray-500 mt-1">
-                                    <span class="w-4 h-4 mr-2 inline-block">${icons.file}</span>
-                                    <span>${state.fileName}</span>
-                                </div>
-                            </div>
-                        </div>
-                        <button id="reset-app-btn" class="px-4 py-2 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600 transition-colors flex items-center">
-                            <span class="w-5 h-5 mr-2 inline-block">${icons.uploadCloud}</span> Upload New File
-                        </button>
-                    </header>
-                    ${activeFilters.length > 0 ? `
-                    <div class="mb-4">
-                        <h3 class="text-sm font-semibold text-gray-600 mb-2">Active Filters:</h3>
-                        <div class="flex flex-wrap gap-2">
-                            ${activeFilters.map(([key, value]) => `
-                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                                    <strong>${key}:</strong>&nbsp;${value}
-                                </span>
-                            `).join('')}
-                        </div>
-                    </div>
-                    ` : ''}
-                </div>
-            `;
+            return `<div id="header-container" class="flex-shrink-0">${renderHeaderContent()}</div>`;
         }
 
-        function renderSummaryPanel(filteredData) {
-            const dates = state.data.map(row => parseDate(row.Created)).filter(d => d);
-            const minDate = dates.length > 0 ? new Date(Math.min.apply(null, dates)) : null;
-            const maxDate = dates.length > 0 ? new Date(Math.max.apply(null, dates)) : null;
-            const timeRange = minDate && maxDate ? `${minDate.toLocaleDateString()} - ${maxDate.toLocaleDateString()}` : 'N/A';
-            const uniqueDomains = new Set(state.data.map(r => r.Domain)).size;
+        function renderHeaderContent() {
+             const activeFilters = Object.entries(state.filters).filter(([key, value]) => value.length > 0);
+            return `<header class="flex justify-between items-center mb-6"><div class="flex items-center"><button id="toggle-sidebar-btn" class="p-2 rounded-md hover:bg-gray-200 mr-4"><span class="w-6 h-6 text-gray-600 inline-block">${state.isSidebarOpen ? icons.x : icons.filter}</span></button><div><h1 class="text-3xl font-bold text-gray-800">Conversation Analysis</h1><div class="flex items-center text-sm text-gray-500 mt-1"><span class="w-4 h-4 mr-2 inline-block">${icons.file}</span><span>${state.fileName}</span></div></div></div><button id="reset-app-btn" class="px-4 py-2 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600 transition-colors flex items-center"><span class="w-5 h-5 mr-2 inline-block">${icons.uploadCloud}</span> Upload New File</button></header>${activeFilters.length > 0 ? `<div class="mb-4"><h3 class="text-sm font-semibold text-gray-600 mb-2">Active Filters:</h3><div class="flex flex-wrap gap-2">${activeFilters.map(([key, values]) => values.map(value => `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800"><strong>${key}:</strong>&nbsp;${value}</span>`).join('')).join('')}</div></div>` : ''}`;
+        }
 
-            const summaryCard = (title, value) => `
-                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
-                    <h3 class="text-sm font-medium text-gray-500">${title}</h3>
-                    <p class="text-2xl font-bold text-gray-800 mt-1">${value}</p>
-                </div>
-            `;
-
-            return `
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    ${summaryCard('Time Range', timeRange)}
-                    ${summaryCard('Total Conversations', state.data.length.toLocaleString())}
-                    ${summaryCard('Filtered Conversations', filteredData.length.toLocaleString())}
-                    ${summaryCard('Unique Domains', uniqueDomains.toLocaleString())}
-                </div>
-            `;
+        function renderSummaryPanel() {
+            return `<div id="summary-panel" class="grid grid-cols-1 md:grid-cols-2 gap-4">${renderSummaryContent()}</div>`;
         }
         
-        function renderMainChart(filteredData) {
-            const total = state.data.length;
-            const filtered = filteredData.length;
-            const percentage = total > 0 ? ((filtered / total) * 100).toFixed(1) : 0;
-
-            return `
-                <div class="flex flex-col h-full">
-                    <h3 class="text-center font-semibold text-gray-700">Filtered vs. Total</h3>
-                    <div class="flex-grow flex items-center justify-center relative">
-                         <canvas id="main-pie-chart"></canvas>
-                         <div class="absolute text-center pointer-events-none">
-                            <span class="text-3xl font-bold text-blue-600">${percentage}%</span>
-                            <p class="text-sm text-gray-500">Filtered</p>
-                         </div>
-                    </div>
-                </div>
-            `;
+        function renderSummaryContent() {
+            const { timeRange, uniqueDomains } = state.summaryStats;
+            const summaryCard = (title, value) => `<div class="bg-white p-5 rounded-xl shadow-sm border border-gray-200"><h3 class="text-sm font-medium text-gray-500">${title}</h3><p class="text-2xl font-bold text-gray-800 mt-1">${value}</p></div>`;
+            return `${summaryCard('Time Range', timeRange)}${summaryCard('Total Conversations', state.data.length.toLocaleString())}${summaryCard('Filtered Conversations', state.filteredData.length.toLocaleString())}${summaryCard('Unique Domains', uniqueDomains.toLocaleString())}`;
+        }
+        
+        function renderMainChart() {
+            return `<div id="main-chart-container" class="flex flex-col h-full"><h3 class="text-center font-semibold text-gray-700">Filtered vs. Total</h3><div class="flex-grow flex items-center justify-center relative"><canvas id="main-pie-chart"></canvas><div class="absolute text-center pointer-events-none"><span id="main-chart-percentage" class="text-3xl font-bold text-blue-600"></span><p class="text-sm text-gray-500">Filtered</p></div></div></div>`;
         }
 
-        function renderDataTable(filteredData) {
-            const sortedData = getSortedData(filteredData);
+        function renderDataTable() {
+            return `<div id="data-table-wrapper" class="relative overflow-auto flex-grow">${renderTableContent()}</div><div id="pagination-controls-container" class="flex-shrink-0 p-2 border-t">${renderPaginationControls()}</div>`;
+        }
+        
+        function renderTableContent() {
+            const paginatedData = getPaginatedAndSortedData();
             const displayHeaders = state.headers.filter(h => h !== 'Custom Metrics');
-            
-            const getSortIndicator = (key) => {
-                if (state.sortConfig.key !== key) return '';
-                return state.sortConfig.direction === 'ascending' ? ' ▲' : ' ▼';
-            };
+            const getSortIndicator = (key) => (state.sortConfig.key !== key) ? '' : (state.sortConfig.direction === 'ascending' ? ' ▲' : ' ▼');
+            return `<table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50 sticky top-0 z-10"><tr>${displayHeaders.map(header => `<th data-sort-key="${header}" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer whitespace-nowrap">${header}${getSortIndicator(header)}</th>`).join('')}${state.customMetricKeys.map(key => `<th data-sort-key="${key}" class="px-6 py-3 text-left text-xs font-medium text-green-600 bg-green-50 uppercase tracking-wider cursor-pointer whitespace-nowrap">${key}${getSortIndicator(key)}</th>`).join('')}</tr></thead><tbody class="bg-white divide-y divide-gray-200">${paginatedData.length > 0 ? paginatedData.map((row) => `<tr>${displayHeaders.map(header => `<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">${String(row[header] ?? '')}</td>`).join('')}${state.customMetricKeys.map(key => `<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 bg-green-50">${String(row[key] ?? '')}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${displayHeaders.length + state.customMetricKeys.length}" class="text-center py-10 text-gray-500">No conversations match the current filters.</td></tr>`}</tbody></table>`;
+        }
 
-            return `
-                <div class="relative overflow-auto flex-grow">
-                    <table class="min-w-full divide-y divide-gray-200">
-                        <thead class="bg-gray-50 sticky top-0 z-10">
-                            <tr>
-                                ${displayHeaders.map(header => `
-                                    <th data-sort-key="${header}" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer whitespace-nowrap">
-                                        ${header}${getSortIndicator(header)}
-                                    </th>
-                                `).join('')}
-                                ${state.customMetricKeys.map(key => `
-                                    <th data-sort-key="${key}" class="px-6 py-3 text-left text-xs font-medium text-green-600 bg-green-50 uppercase tracking-wider cursor-pointer whitespace-nowrap">
-                                        ${key}${getSortIndicator(key)}
-                                    </th>
-                                `).join('')}
-                            </tr>
-                        </thead>
-                        <tbody class="bg-white divide-y divide-gray-200">
-                            ${sortedData.length > 0 ? sortedData.map((row, index) => `
-                                <tr class="hover:bg-gray-50">
-                                    ${displayHeaders.map(header => `
-                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">${String(row[header] ?? '')}</td>
-                                    `).join('')}
-                                    ${state.customMetricKeys.map(key => `
-                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 bg-green-50">${String(row[key] ?? '')}</td>
-                                    `).join('')}
-                                </tr>
-                            `).join('') : `
-                                <tr>
-                                    <td colspan="${displayHeaders.length + state.customMetricKeys.length}" class="text-center py-10 text-gray-500">
-                                        No conversations match the current filters.
-                                    </td>
-                                </tr>
-                            `}
-                        </tbody>
-                    </table>
+        function renderPaginationControls() {
+            const { currentPage, rowsPerPage } = state.pagination;
+            const totalRows = state.filteredData.length;
+            const totalPages = Math.ceil(totalRows / rowsPerPage);
+            const startRow = totalRows === 0 ? 0 : (currentPage - 1) * rowsPerPage + 1;
+            const endRow = Math.min(currentPage * rowsPerPage, totalRows);
+
+            return `<div class="flex items-center justify-between text-sm text-gray-600">
+                <div>Showing ${startRow} to ${endRow} of ${totalRows.toLocaleString()} results</div>
+                <div class="flex items-center gap-2">
+                    <button id="prev-page-btn" class="px-3 py-1 border rounded-md hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed" ${currentPage === 1 ? 'disabled' : ''}>Previous</button>
+                    <span>Page ${currentPage} of ${totalPages > 0 ? totalPages : 1}</span>
+                    <button id="next-page-btn" class="px-3 py-1 border rounded-md hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed" ${currentPage >= totalPages ? 'disabled' : ''}>Next</button>
                 </div>
-            `;
+            </div>`;
         }
         
-        function renderAnalysisModal(filteredData) {
-             modalRoot.innerHTML = `
-                <div id="analysis-modal-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4 opacity-0">
-                    <div id="analysis-modal-container" class="bg-white rounded-2xl shadow-2xl w-full max-w-6xl transform scale-95">
-                        <div class="p-6 border-b flex justify-between items-center">
-                            <h2 class="text-2xl font-bold text-gray-800">Deeper Analysis of Filtered Results</h2>
-                            <button id="close-modal-btn" class="p-2 rounded-full hover:bg-gray-200">
-                                <span class="w-6 h-6 text-gray-600 inline-block">${icons.x}</span>
-                            </button>
-                        </div>
-                        <div class="p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" style="max-height: 75vh; overflow-y: auto;">
-                            <!-- Chart containers -->
-                            <div class="bg-gray-50 p-4 rounded-xl"><h3 class="text-center font-semibold text-gray-700 mb-2">Amelia Handled</h3><canvas id="amelia-handled-chart"></canvas></div>
-                            <div class="bg-gray-50 p-4 rounded-xl"><h3 class="text-center font-semibold text-gray-700 mb-2">Escalated</h3><canvas id="escalated-chart"></canvas></div>
-                            <div class="bg-gray-50 p-4 rounded-xl md:col-span-2 lg:col-span-1"><h3 class="text-center font-semibold text-gray-700 mb-2">Conversation Volume</h3><canvas id="volume-chart"></canvas></div>
-                        </div>
-                    </div>
-                </div>
-            `;
-            
-            // Trigger animations
-            setTimeout(() => {
-                document.getElementById('analysis-modal-overlay').classList.remove('opacity-0');
-                document.getElementById('analysis-modal-container').classList.remove('scale-95');
-            }, 10);
-
-            setupAnalysisCharts(filteredData);
-            document.getElementById('close-modal-btn').addEventListener('click', closeAnalysisModal);
-            document.getElementById('analysis-modal-overlay').addEventListener('click', (e) => {
-                if (e.target.id === 'analysis-modal-overlay') {
-                    closeAnalysisModal();
-                }
-            });
-        }
-
-        function closeAnalysisModal() {
-            const overlay = document.getElementById('analysis-modal-overlay');
-            const container = document.getElementById('analysis-modal-container');
-            if (overlay) {
-                 overlay.classList.add('opacity-0');
-                 container.classList.add('scale-95');
-                 setTimeout(() => {
-                    modalRoot.innerHTML = '';
-                    Object.values(state.analysisChartInstances).forEach(chart => chart.destroy());
-                    state.analysisChartInstances = {};
-                 }, 300);
-            }
-        }
-
-
         // --- LOGIC & DATA HANDLING ---
-
         function parseDate(dateString) {
             if (!dateString) return null;
             const cleanDateString = dateString.replace(/\[.*\]/, '');
             const date = new Date(cleanDateString);
             return isNaN(date) ? null : date;
         }
-
-        function getFilteredData() {
-            return state.data.filter(row => {
-                return Object.entries(state.filters).every(([key, value]) => {
-                    if (value === '') return true;
-                    return String(row[key]) === String(value);
-                });
-            });
-        }
         
-        function getSortedData(data) {
-            let sortableData = [...data];
+        function getPaginatedAndSortedData() {
+            let sortableData = [...state.filteredData];
             const { key, direction } = state.sortConfig;
             if (key !== null) {
                 sortableData.sort((a, b) => {
-                    const valA = a[key];
-                    const valB = b[key];
+                    const valA = a[key]; const valB = b[key];
                     if (valA < valB) return direction === 'ascending' ? -1 : 1;
                     if (valA > valB) return direction === 'ascending' ? 1 : -1;
                     return 0;
                 });
             }
-            return sortableData;
+            const { currentPage, rowsPerPage } = state.pagination;
+            const start = (currentPage - 1) * rowsPerPage;
+            const end = start + rowsPerPage;
+            return sortableData.slice(start, end);
         }
 
         function getFilterOptions() {
@@ -432,313 +250,457 @@
             const filterableColumns = ['Domain', 'Status', 'Channel', 'Escalated', 'Amelia Handled', 'Agent Handled', ...state.customMetricKeys];
             filterableColumns.forEach(header => {
                 const uniqueValues = [...new Set(state.data.map(row => row[header]).filter(val => val != null && val !== ''))];
-                if (uniqueValues.length > 0) {
-                    options[header] = uniqueValues.sort();
-                }
+                if (uniqueValues.length > 0) options[header] = uniqueValues.sort();
             });
             return options;
         }
 
         function handleFile(file) {
+            if (!file) return;
             if (file.type !== 'text/csv') {
                 state.error = 'Invalid file type. Please upload a CSV file.';
                 renderApp();
                 return;
             }
-            state.fileName = file.name;
-            state.error = '';
-            state.isLoading = true;
-            renderApp(); // Show loader
-
-            const standardHeaders = new Set(['Conversation Id', 'Domain', 'Created', 'Ended', 'Finished', 'Status', 'Channel', 'Primary Agent Email', 'Primary Agent Handle Time', 'Primary Agent Answer Speed', 'Pickup SLA Violation', 'Escalated', 'Escalation Queue', 'Escalation Reason', 'Abandoned', 'Amelia Handled', 'Amelia Abandoned', 'Agent Handled', 'Agent Abandoned', 'Escalate Abandoned', 'Total Handle Time', 'Executed BPNs', 'User Name', 'User Email', 'User External Uid', 'Disconnect Wait Time', 'After Conversation Time', 'After Conversation Violation', 'Resolution Codes', 'Custom Metrics']);
-
-            Papa.parse(file, {
-                header: true,
-                skipEmptyLines: true,
-                complete: (results) => {
-                    let parsedData = results.data;
-                    const headersFromFile = results.meta.fields;
-                    const newCustomMetricKeys = new Set();
-
-                    // Check if we're dealing with the original format or a re-upload
-                    const isOriginalFormat = headersFromFile.includes('Custom Metrics');
-
-                    if (isOriginalFormat) {
-                        parsedData = results.data.map(row => {
-                            const customMetricsRaw = row['Custom Metrics'] || '';
-                            const customMetrics = {};
-                            if (customMetricsRaw) {
-                                customMetricsRaw.split('||').forEach(metric => {
-                                    const [key, value] = metric.split('=');
-                                    if (key) {
-                                        const trimmedKey = key.trim();
-                                        customMetrics[trimmedKey] = value ? value.trim() : null;
-                                        newCustomMetricKeys.add(trimmedKey);
-                                    }
-                                });
-                            }
-                            return { ...row, ...customMetrics };
-                        });
-                    } else {
-                        // This is a re-upload, identify custom metrics by exclusion
-                        headersFromFile.forEach(header => {
-                            if (!standardHeaders.has(header)) {
-                                newCustomMetricKeys.add(header);
-                            }
-                        });
-                    }
-
-                    state.data = parsedData;
-                    state.headers = headersFromFile;
-                    state.customMetricKeys = Array.from(newCustomMetricKeys);
-                    state.filters = {};
-                    state.isLoading = false;
-                    renderApp();
-                },
-                error: (err, file) => {
-                    console.error("Parsing Error:", err);
-                    state.isLoading = false;
-                    state.error = "Failed to parse the CSV file. Please ensure it is correctly formatted.";
-                    renderApp();
-                }
-            });
+            state.fileName = file.name; state.error = ''; state.isLoading = true;
+            renderApp(); 
+            fileParserWorker.postMessage({ type: 'parse', file });
         }
         
         function resetApp() {
-            if (state.mainChartInstance) {
-                state.mainChartInstance.destroy();
-                state.mainChartInstance = null;
-            }
-            closeAnalysisModal();
-            state.data = [];
-            state.headers = [];
-            state.customMetricKeys = [];
-            state.filters = {};
-            state.fileName = '';
-            state.error = '';
-            state.isLoading = false;
+            if (state.mainChartInstance) { state.mainChartInstance.destroy(); state.mainChartInstance = null; }
+            closeConsumptionAnalysisModal();
+            Object.assign(state, { data: [], filteredData: [], headers: [], customMetricKeys: [], filters: {}, fileName: '', error: '', isLoading: false, pagination: { currentPage: 1, rowsPerPage: 100 } });
             renderApp();
         }
 
         function downloadFilteredCSV() {
-            const filteredData = getFilteredData();
-            if (filteredData.length === 0) {
-                alert("No data to download.");
-                return;
-            }
-
-            // To ensure all columns are present even if a row is missing a custom metric
-            const allHeaders = [...state.headers.filter(h => h !== 'Custom Metrics'), ...state.customMetricKeys].filter((value, index, self) => self.indexOf(value) === index);
-            
-            const csv = Papa.unparse({
-                fields: allHeaders,
-                data: filteredData
-            });
-
+            if (state.filteredData.length === 0) { alert("No data to download."); return; }
+            const allHeaders = [...new Set([...state.headers.filter(h => h !== 'Custom Metrics'), ...state.customMetricKeys])];
+            const csv = Papa.unparse({ fields: allHeaders, data: state.filteredData });
             const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement("a");
-            const url = URL.createObjectURL(blob);
-            link.setAttribute("href", url);
-            link.setAttribute("download", `filtered_${state.fileName}`);
-            link.style.visibility = 'hidden';
+            link.href = URL.createObjectURL(blob);
+            link.download = `filtered_${state.fileName}`;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
         }
 
+        // --- CHART UPDATE FUNCTIONS (OPTIMIZED) ---
         function setupMainChart() {
             const chartEl = document.getElementById('main-pie-chart');
             if (!chartEl) return;
-            
-            if (state.mainChartInstance) {
-                state.mainChartInstance.destroy();
-            }
-
-            const filteredData = getFilteredData();
-            const total = state.data.length;
-            const filtered = filteredData.length;
-            const others = total - filtered;
-
-            const chartData = {
-                labels: ['Filtered Conversations', 'Other Conversations'],
-                datasets: [{
-                    data: [filtered, others],
-                    backgroundColor: ['#3b82f6', '#e5e7eb'],
-                    hoverBackgroundColor: ['#2563eb', '#d1d5db'],
-                    borderWidth: 0,
-                }]
-            };
-
             state.mainChartInstance = new Chart(chartEl.getContext('2d'), {
                 type: 'doughnut',
-                data: chartData,
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    cutout: '75%',
-                    plugins: {
-                        legend: {
-                            display: false
-                        },
-                        tooltip: {
-                            enabled: true
-                        }
-                    }
-                }
+                data: { labels: ['Filtered Conversations', 'Other Conversations'], datasets: [{ data: [], backgroundColor: ['#3b82f6', '#e5e7eb'], hoverBackgroundColor: ['#2563eb', '#d1d5db'], borderWidth: 0 }] },
+                options: { responsive: true, maintainAspectRatio: false, cutout: '75%', plugins: { legend: { display: false }, tooltip: { enabled: true } } }
             });
+            updateMainChart();
         }
-        
-        function setupAnalysisCharts(filteredData) {
-            // Amelia Handled Chart
-            const ameliaHandled = filteredData.filter(r => r['Amelia Handled'] === 'true').length;
-            createPieChart('amelia-handled-chart', ['Amelia Handled', 'Agent Involved'], [ameliaHandled, filteredData.length - ameliaHandled], ['#10b981', '#fecaca']);
 
-            // Escalated Chart
-            const escalated = filteredData.filter(r => r['Escalated'] === 'true').length;
-            createPieChart('escalated-chart', ['Escalated', 'Not Escalated'], [escalated, filteredData.length - escalated], ['#f97316', '#dbeafe']);
+        function updateMainChart() {
+            if (!state.mainChartInstance) return;
+            const total = state.data.length; const filtered = state.filteredData.length; const others = total - filtered;
+            const percentage = total > 0 ? ((filtered / total) * 100).toFixed(1) : 0;
             
-            // Volume Chart
-            const volumeByDate = filteredData.reduce((acc, row) => {
-                const date = parseDate(row.Created)?.toLocaleDateString();
-                if (date) {
-                    acc[date] = (acc[date] || 0) + 1;
-                }
-                return acc;
-            }, {});
-            
-            const sortedDates = Object.keys(volumeByDate).sort((a, b) => new Date(a) - new Date(b));
-            const volumeLabels = sortedDates;
-            const volumeData = sortedDates.map(date => volumeByDate[date]);
-            createLineChart('volume-chart', volumeLabels, volumeData);
+            state.mainChartInstance.data.datasets[0].data = [filtered, others];
+            state.mainChartInstance.update();
+            document.getElementById('main-chart-percentage').textContent = `${percentage}%`;
         }
         
-        function createPieChart(canvasId, labels, data, colors) {
-            const chartEl = document.getElementById(canvasId);
-            if (!chartEl) return;
-            
-            state.analysisChartInstances[canvasId] = new Chart(chartEl.getContext('2d'), {
-                type: 'pie',
-                data: {
-                    labels: labels,
-                    datasets: [{ data: data, backgroundColor: colors, borderWidth: 0 }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: true,
-                    plugins: { legend: { position: 'bottom' } }
+        // --- DEEPER ANALYSIS MODAL ---
+        function transformDataForDeeperAnalysis(filteredData) {
+            const dailyAggregation = {};
+            const handleTimeAggregation = {};
+            const contained = filteredData.filter(r => r['Amelia Handled'] === 'true').length;
+            const notContained = filteredData.length - contained;
+
+            filteredData.forEach(row => {
+                const date = parseDate(row.Created);
+                if (!date) return;
+                const dateString = date.toISOString().slice(0, 10); // YYYY-MM-DD
+                const handleTime = parseHandleTime(row['Total Handle Time']);
+                
+                const key = `${row.Domain || 'Unknown'}|${row.Channel || 'Unknown'}|${dateString}`;
+                if (!dailyAggregation[key]) dailyAggregation[key] = { domain: row.Domain || 'Unknown', channel: row.Channel || 'Unknown', date: dateString, count: 0 };
+                dailyAggregation[key].count += 1;
+
+                if (handleTime !== null) {
+                    if (!handleTimeAggregation[dateString]) handleTimeAggregation[dateString] = { totalSeconds: 0, count: 0 };
+                    handleTimeAggregation[dateString].totalSeconds += handleTime;
+                    handleTimeAggregation[dateString].count += 1;
                 }
             });
+
+            const handleTimeData = Object.entries(handleTimeAggregation).map(([date, data]) => ({
+                date, avgMinutes: (data.totalSeconds / data.count) / 60
+            })).sort((a,b) => new Date(a.date) - new Date(b.date));
+
+            return { volumeData: Object.values(dailyAggregation), containmentData: { contained, notContained }, handleTimeData: handleTimeData };
         }
         
-        function createLineChart(canvasId, labels, data) {
-            const chartEl = document.getElementById(canvasId);
-            if (!chartEl) return;
+        function parseHandleTime(timeStr) {
+            if (!timeStr || typeof timeStr !== 'string') return null;
+            const parts = timeStr.split(':');
+            if (parts.length !== 3) return null;
+            const [hours, minutes, seconds] = parts.map(Number);
+            if (isNaN(hours) || isNaN(minutes) || isNaN(seconds)) return null;
+            return hours * 3600 + minutes * 60 + seconds;
+        }
+
+        function renderConsumptionAnalysisModal(analysisData) {
+            state.consumptionAnalysisState.originalData = analysisData.volumeData;
+            modalRoot.innerHTML = `<div id="ca-modal-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4 opacity-0"><div id="ca-modal-container" class="bg-white rounded-2xl shadow-2xl w-full max-w-7xl h-[90vh] flex flex-col transform scale-95"><div class="p-4 border-b flex justify-between items-center flex-shrink-0"><h2 class="text-2xl font-bold text-gray-800">Deeper Analysis</h2><div class="flex items-center gap-4"><button id="ca-download-report-btn" class="px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700">Download Report</button><button id="ca-close-modal-btn" class="p-2 rounded-full hover:bg-gray-200">${icons.x}</button></div></div><div class="flex-grow p-6 overflow-y-auto"><div class="grid grid-cols-1 lg:grid-cols-2 gap-6"><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Containment Rate</h3><div style="height: 250px; max-width: 250px; margin: auto;"><canvas id="ca-containment-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Avg. Handle Time Trend (Minutes)</h3><div style="height: 250px;"><canvas id="ca-handle-time-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Daily Conversation Volume</h3><div style="height: 250px;"><canvas id="ca-daily-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Weekly Conversation Volume</h3><div style="height: 250px;"><canvas id="ca-weekly-chart"></canvas></div></div></div></div></div></div>`;
             
-            state.analysisChartInstances[canvasId] = new Chart(chartEl.getContext('2d'), {
+            setTimeout(() => {
+                document.getElementById('ca-modal-overlay').classList.remove('opacity-0');
+                document.getElementById('ca-modal-container').classList.remove('scale-95');
+            }, 10);
+
+            setupConsumptionAnalysis(analysisData);
+            document.getElementById('ca-close-modal-btn').addEventListener('click', closeConsumptionAnalysisModal);
+            document.getElementById('ca-download-report-btn').addEventListener('click', downloadConsumptionReport);
+            document.getElementById('ca-modal-overlay').addEventListener('click', (e) => { if (e.target.id === 'ca-modal-overlay') closeConsumptionAnalysisModal(); });
+        }
+
+        function closeConsumptionAnalysisModal() {
+            const overlay = document.getElementById('ca-modal-overlay');
+            if (overlay) {
+                 overlay.classList.add('opacity-0');
+                 document.getElementById('ca-modal-container').classList.add('scale-95');
+                 setTimeout(() => {
+                    modalRoot.innerHTML = '';
+                    Object.values(state.consumptionAnalysisState).forEach(chart => { if (chart && typeof chart.destroy === 'function') chart.destroy(); });
+                    state.consumptionAnalysisState = { dailyChart: null, weeklyChart: null, containmentChart: null, handleTimeChart: null, originalData: [] };
+                 }, 300);
+            }
+        }
+        
+        function setupConsumptionAnalysis(data) {
+            ca_displayContainmentChart(data.containmentData);
+            ca_displayHandleTimeChart(data.handleTimeData);
+            ca_displayDailyChart(data.volumeData);
+            ca_displayWeeklyChart(data.volumeData);
+        }
+
+        function ca_displayContainmentChart(containmentData) {
+            const { contained, notContained } = containmentData;
+            const chartEl = document.getElementById('ca-containment-chart');
+            if (!chartEl) return;
+            state.consumptionAnalysisState.containmentChart = new Chart(chartEl, {
+                type: 'doughnut',
+                data: { labels: ['Contained', 'Not Contained'], datasets: [{ data: [contained, notContained], backgroundColor: ['#10b981', '#ef4444'], borderWidth: 0 }] },
+                options: { responsive: true, maintainAspectRatio: true, cutout: '60%', plugins: { legend: { position: 'bottom' } } }
+            });
+        }
+
+        function ca_displayHandleTimeChart(handleTimeData) {
+            const chartEl = document.getElementById('ca-handle-time-chart');
+            if (!chartEl) return;
+            const labels = handleTimeData.map(d => d.date);
+            const data = handleTimeData.map(d => d.avgMinutes);
+            state.consumptionAnalysisState.handleTimeChart = new Chart(chartEl, {
                 type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: 'Conversations',
-                        data: data,
-                        borderColor: '#3b82f6',
-                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                        fill: true,
-                        tension: 0.1
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: true,
-                    plugins: { legend: { display: false } },
-                    scales: {
-                        y: { beginAtZero: true, ticks: { precision: 0 } },
-                        x: { ticks: { maxRotation: 45, minRotation: 45 } }
-                    }
-                }
+                data: { labels: labels, datasets: [{ label: 'Avg Handle Time (min)', data: data, borderColor: '#8b5cf6', backgroundColor: 'rgba(139, 92, 246, 0.1)', fill: true, tension: 0.2 }] },
+                options: { responsive: true, maintainAspectRatio: false, scales: { x: { type: 'time', time: { unit: 'day' } }, y: { beginAtZero: true, title: { display: true, text: 'Minutes' } } }, plugins: { legend: { display: false } } }
             });
         }
 
+        function ca_displayDailyChart(data) {
+            const dailyData = {}; const datasetKeys = new Set();
+            data.forEach(row => {
+                const dateKey = row.date;
+                const count = Number(row.count) || 0;
+                const dataKey = `${row.domain || 'Unknown'} - ${row.channel || 'Unknown'}`;
+                datasetKeys.add(dataKey);
+                if (!dailyData[dateKey]) dailyData[dateKey] = {};
+                dailyData[dateKey][dataKey] = (dailyData[dateKey][dataKey] || 0) + count;
+            });
+            const sortedDays = [...new Set(state.consumptionAnalysisState.originalData.map(r => r.date))].sort();
+            const datasets = Array.from(datasetKeys).sort().map((key, index) => ({
+                label: key, data: sortedDays.map(day => dailyData[day]?.[key] || 0),
+                borderColor: ca_generateColor(index), backgroundColor: ca_generateColor(index) + '1A', fill: true, tension: 0.2
+            }));
+            if (state.consumptionAnalysisState.dailyChart) state.consumptionAnalysisState.dailyChart.destroy();
+            state.consumptionAnalysisState.dailyChart = new Chart(document.getElementById('ca-daily-chart'), {
+                type: 'line', data: { labels: sortedDays, datasets },
+                options: { responsive: true, maintainAspectRatio: false, scales: { x: { type: 'time', time: { unit: 'day' } }, y: { beginAtZero: true } }, plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } } }
+            });
+        }
+        
+        function getWeekStartDate(date) {
+            const d = new Date(date + 'T00:00:00Z');
+            const day = d.getUTCDay();
+            const diff = d.getUTCDate() - day;
+            return new Date(d.setUTCDate(diff)).toISOString().slice(0, 10);
+        }
 
-        // --- EVENT LISTENERS ---
+        function ca_displayWeeklyChart(data) {
+            const weeklyData = {}; const datasetKeys = new Set();
+            data.forEach(row => {
+                const weekKey = getWeekStartDate(row.date);
+                const count = Number(row.count) || 0;
+                const dataKey = `${row.domain || 'Unknown'} - ${row.channel || 'Unknown'}`;
+                datasetKeys.add(dataKey);
+                if (!weeklyData[weekKey]) weeklyData[weekKey] = {};
+                weeklyData[weekKey][dataKey] = (weeklyData[weekKey][dataKey] || 0) + count;
+            });
+            const sortedWeeks = [...new Set(state.consumptionAnalysisState.originalData.map(r => getWeekStartDate(r.date)))].sort();
+            const datasets = Array.from(datasetKeys).sort().map((key, index) => ({
+                label: key, data: sortedWeeks.map(week => weeklyData[week]?.[key] || 0),
+                backgroundColor: ca_generateColor(index)
+            }));
+            if (state.consumptionAnalysisState.weeklyChart) state.consumptionAnalysisState.weeklyChart.destroy();
+            state.consumptionAnalysisState.weeklyChart = new Chart(document.getElementById('ca-weekly-chart'), {
+                type: 'bar', data: { labels: sortedWeeks, datasets },
+                options: { responsive: true, maintainAspectRatio: false, scales: { x: { type: 'time', time: { unit: 'week' }, stacked: true }, y: { beginAtZero: true, stacked: true } }, plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } } }
+            });
+        }
+        
+        function ca_generateColor(index) {
+            const colors = ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#3b82f6', '#8b5cf6', '#ec4899'];
+            return colors[index % colors.length];
+        }
+        
+        async function downloadConsumptionReport() {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({ orientation: 'l', unit: 'mm', format: 'a4' });
+            const addImageToPdf = async (element, doc, yPos, title) => {
+                const canvas = await html2canvas(element, { scale: 2, backgroundColor: '#ffffff' });
+                const imgData = canvas.toDataURL('image/png');
+                const pageWidth = doc.internal.pageSize.getWidth(); const margin = 15;
+                const imgWidth = pageWidth - (margin * 2);
+                const imgHeight = (canvas.height * imgWidth) / canvas.width;
+                doc.setFontSize(16); doc.text(title, margin, yPos);
+                doc.addImage(imgData, 'PNG', margin, yPos + 5, imgWidth, imgHeight);
+                return yPos + imgHeight + 15;
+            };
+            doc.addPage();
+            let yPos = 15;
+            yPos = await addImageToPdf(document.getElementById('ca-containment-chart').parentElement, doc, yPos, 'Containment Rate');
+            yPos = await addImageToPdf(document.getElementById('ca-handle-time-chart').parentElement, doc, yPos, 'Avg. Handle Time Trend');
+            doc.addPage();
+            yPos = 15;
+            yPos = await addImageToPdf(document.getElementById('ca-daily-chart').parentElement, doc, yPos, 'Daily Conversation Volume');
+            yPos = await addImageToPdf(document.getElementById('ca-weekly-chart').parentElement, doc, yPos, 'Weekly Conversation Volume');
+            doc.deletePage(1);
+            doc.save('Deeper_Analysis_Report.pdf');
+        }
+
+        // --- EVENT LISTENERS & WORKER SETUP ---
+
+        function setupFileParserWorker() {
+            const workerCode = `
+                self.importScripts('https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js');
+                let fullData = [];
+
+                function applyFilters(filters) {
+                    if (Object.keys(filters).length === 0 || Object.values(filters).every(arr => arr.length === 0)) {
+                        return fullData;
+                    }
+                    return fullData.filter(row => {
+                        return Object.entries(filters).every(([key, selectedValues]) => {
+                            if (!selectedValues || selectedValues.length === 0) {
+                                return true;
+                            }
+                            return selectedValues.includes(String(row[key]));
+                        });
+                    });
+                }
+                
+                self.onmessage = function(e) {
+                    const messageType = e.data.type;
+
+                    if (messageType === 'parse') {
+                        const file = e.data.file;
+                        const standardHeaders = new Set(['Conversation Id', 'Domain', 'Created', 'Ended', 'Finished', 'Status', 'Channel', 'Primary Agent Email', 'Primary Agent Handle Time', 'Primary Agent Answer Speed', 'Pickup SLA Violation', 'Escalated', 'Escalation Queue', 'Escalation Reason', 'Abandoned', 'Amelia Handled', 'Amelia Abandoned', 'Agent Handled', 'Agent Abandoned', 'Escalate Abandoned', 'Total Handle Time', 'Executed BPNs', 'User Name', 'User Email', 'User External Uid', 'Disconnect Wait Time', 'After Conversation Time', 'After Conversation Violation', 'Resolution Codes', 'Custom Metrics']);
+
+                        Papa.parse(file, {
+                            header: true,
+                            skipEmptyLines: true,
+                            complete: (results) => {
+                                if (results.errors && results.errors.length > 0 && results.data.length === 0) {
+                                    self.postMessage({ type: 'parse-error', error: results.errors[0].message });
+                                    return;
+                                }
+                                let parsedData = results.data;
+                                const headersFromFile = results.meta.fields;
+                                const newCustomMetricKeys = new Set();
+                                const isOriginalFormat = headersFromFile.includes('Custom Metrics');
+
+                                if (isOriginalFormat) {
+                                    parsedData = results.data.map(row => {
+                                        const customMetricsRaw = row['Custom Metrics'] || '';
+                                        const customMetrics = {};
+                                        if (customMetricsRaw) {
+                                            customMetricsRaw.split('||').forEach(metric => {
+                                                const [key, value] = metric.split('=');
+                                                if (key) {
+                                                    const trimmedKey = key.trim();
+                                                    customMetrics[trimmedKey] = value ? value.trim() : null;
+                                                    newCustomMetricKeys.add(trimmedKey);
+                                                }
+                                            });
+                                        }
+                                        return { ...row, ...customMetrics };
+                                    });
+                                } else {
+                                    headersFromFile.forEach(header => { if (!standardHeaders.has(header)) newCustomMetricKeys.add(header); });
+                                }
+                                fullData = parsedData;
+                                self.postMessage({
+                                    type: 'parse-success',
+                                    data: fullData,
+                                    headers: headersFromFile,
+                                    customMetricKeys: Array.from(newCustomMetricKeys)
+                                });
+                            },
+                            error: (err) => {
+                                self.postMessage({ type: 'parse-error', error: (err && err.message) ? err.message : 'An unknown parsing error occurred.' });
+                            }
+                        });
+                    } else if (messageType === 'filter') {
+                        const filteredData = applyFilters(e.data.filters);
+                        self.postMessage({ type: 'filter-success', filteredData: filteredData });
+                    }
+                };
+            `;
+            const blob = new Blob([workerCode], { type: 'application/javascript' });
+            return new Worker(URL.createObjectURL(blob));
+        }
 
         function setupUploaderEventListeners() {
             const dropzone = document.getElementById('dropzone');
             const fileInput = document.createElement('input');
-            fileInput.type = 'file';
-            fileInput.accept = '.csv';
-
+            fileInput.type = 'file'; fileInput.accept = '.csv';
             dropzone.addEventListener('click', () => fileInput.click());
-            fileInput.addEventListener('change', (e) => {
-                if (e.target.files.length > 0) {
-                    handleFile(e.target.files[0]);
-                }
-            });
-
-            dropzone.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                dropzone.classList.add('border-blue-500', 'bg-blue-50');
-            });
-            dropzone.addEventListener('dragleave', (e) => {
-                e.preventDefault();
-                dropzone.classList.remove('border-blue-500', 'bg-blue-50');
-            });
-            dropzone.addEventListener('drop', (e) => {
-                e.preventDefault();
-                dropzone.classList.remove('border-blue-500', 'bg-blue-50');
-                if (e.dataTransfer.files.length > 0) {
-                    handleFile(e.dataTransfer.files[0]);
-                }
-            });
+            fileInput.addEventListener('change', (e) => { if (e.target.files.length > 0) handleFile(e.target.files[0]); });
+            dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('border-blue-500', 'bg-blue-50'); });
+            dropzone.addEventListener('dragleave', (e) => { e.preventDefault(); dropzone.classList.remove('border-blue-500', 'bg-blue-50'); });
+            dropzone.addEventListener('drop', (e) => { e.preventDefault(); dropzone.classList.remove('border-blue-500', 'bg-blue-50'); if (e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]); });
         }
 
         function setupDashboardEventListeners() {
-            document.getElementById('toggle-sidebar-btn').addEventListener('click', () => {
-                state.isSidebarOpen = !state.isSidebarOpen;
-                renderApp();
+            document.getElementById('toggle-sidebar-btn').addEventListener('click', () => { 
+                state.isSidebarOpen = !state.isSidebarOpen; 
+                document.getElementById('sidebar').classList.toggle('hidden');
+                document.getElementById('sidebar').classList.toggle('flex');
+                document.getElementById('toggle-sidebar-btn').innerHTML = `<span class="w-6 h-6 text-gray-600 inline-block">${state.isSidebarOpen ? icons.x : icons.filter}</span>`;
             });
-
             document.getElementById('reset-app-btn').addEventListener('click', resetApp);
             
-            document.querySelectorAll('[data-filter-key]').forEach(select => {
-                select.addEventListener('change', (e) => {
-                    const key = e.target.dataset.filterKey;
-                    const value = e.target.value;
-                    state.filters[key] = value;
-                    renderApp();
-                });
-            });
+            const sidebar = document.getElementById('sidebar');
+            if(sidebar) {
+                 sidebar.addEventListener('click', (e) => {
+                    const checkbox = e.target.closest('input[type="checkbox"]');
+                    const header = e.target.closest('[data-collapsible-key]');
 
-            const clearFiltersBtn = document.getElementById('clear-filters-btn');
-            if(clearFiltersBtn) clearFiltersBtn.addEventListener('click', () => {
-                state.filters = {};
-                renderApp();
-            });
-
-            const downloadBtn = document.getElementById('download-csv-btn');
-            if(downloadBtn) downloadBtn.addEventListener('click', downloadFilteredCSV);
-
-            const analysisBtn = document.getElementById('deeper-analysis-btn');
-            if(analysisBtn) analysisBtn.addEventListener('click', () => {
-                renderAnalysisModal(getFilteredData());
-            });
-            
-            document.querySelectorAll('[data-sort-key]').forEach(th => {
-                th.addEventListener('click', (e) => {
-                    const key = e.currentTarget.dataset.sortKey;
-                    let direction = 'ascending';
-                    if(state.sortConfig.key === key && state.sortConfig.direction === 'ascending') {
-                        direction = 'descending';
+                    if (checkbox) {
+                        const key = checkbox.dataset.filterKey;
+                        const checkedBoxes = document.querySelectorAll(`input[data-filter-key="${key}"]:checked`);
+                        state.filters[key] = Array.from(checkedBoxes).map(cb => cb.value);
+                        state.pagination.currentPage = 1; 
+                        fileParserWorker.postMessage({ type: 'filter', filters: state.filters });
+                    } else if (header) {
+                        const container = header.nextElementSibling;
+                        container.classList.toggle('hidden');
+                        const icon = header.querySelector('.collapse-icon');
+                        icon.innerHTML = container.classList.contains('hidden') ? icons.chevronRight : icons.chevronDown;
                     }
-                    state.sortConfig = { key, direction };
-                    renderApp();
                 });
+            }
+
+            document.getElementById('clear-filters-btn').addEventListener('click', () => { 
+                document.querySelectorAll('#sidebar input[type="checkbox"]').forEach(cb => cb.checked = false);
+                state.filters = {};
+                state.pagination.currentPage = 1;
+                fileParserWorker.postMessage({ type: 'filter', filters: state.filters });
             });
-            
+            document.getElementById('download-csv-btn').addEventListener('click', downloadFilteredCSV);
+            document.getElementById('deeper-analysis-btn').addEventListener('click', () => {
+                const analysisData = transformDataForDeeperAnalysis(state.filteredData);
+                renderConsumptionAnalysisModal(analysisData);
+            });
+            const tableWrapper = document.getElementById('data-table-wrapper');
+            if (tableWrapper) {
+                tableWrapper.addEventListener('click', (e) => {
+                    const th = e.target.closest('th[data-sort-key]');
+                    if (!th) return;
+                    const key = th.dataset.sortKey;
+                    let direction = 'ascending';
+                    if(state.sortConfig.key === key && state.sortConfig.direction === 'ascending') direction = 'descending';
+                    state.sortConfig = { key, direction };
+                    state.pagination.currentPage = 1;
+                    updateDataTable();
+                });
+            }
+            const paginationContainer = document.getElementById('pagination-controls-container');
+            if(paginationContainer) {
+                paginationContainer.addEventListener('click', (e) => {
+                    if (e.target.id === 'prev-page-btn') {
+                        state.pagination.currentPage--;
+                        updateDataTable();
+                    }
+                    if (e.target.id === 'next-page-btn') {
+                        state.pagination.currentPage++;
+                        updateDataTable();
+                    }
+                });
+            }
             setupMainChart();
         }
+        
+        // --- TARGETED UPDATE FUNCTIONS ---
+        function updateSummaryPanel() {
+            document.getElementById('summary-panel').innerHTML = renderSummaryContent();
+        }
+        function updateDataTable() {
+            document.getElementById('data-table-wrapper').innerHTML = renderTableContent();
+            document.getElementById('pagination-controls-container').innerHTML = renderPaginationControls();
+        }
+        function updateHeader() {
+            document.getElementById('header-container').innerHTML = renderHeaderContent();
+        }
+        function updateSidebarButtons() {
+            const hasActiveFilters = Object.values(state.filters).some(arr => arr.length > 0);
+            const btn = document.getElementById('deeper-analysis-btn');
+            if (btn) {
+                btn.disabled = !hasActiveFilters;
+                btn.classList.toggle('opacity-50', !hasActiveFilters);
+                btn.classList.toggle('cursor-not-allowed', !hasActiveFilters);
+            }
+        }
 
-        // --- INITIAL RENDER ---
+        // --- INITIALIZATION ---
+        fileParserWorker = setupFileParserWorker();
+        fileParserWorker.onmessage = (e) => {
+            const messageType = e.data.type;
+            if (messageType === 'parse-success') {
+                state.data = e.data.data;
+                state.headers = e.data.headers;
+                state.customMetricKeys = e.data.customMetricKeys;
+                
+                // Pre-calculate summary stats once
+                const dates = state.data.map(row => parseDate(row.Created)).filter(d => d);
+                const minDate = dates.length > 0 ? new Date(Math.min.apply(null, dates)) : null;
+                const maxDate = dates.length > 0 ? new Date(Math.max.apply(null, dates)) : null;
+                state.summaryStats.timeRange = minDate && maxDate ? `${minDate.toLocaleDateString()} - ${maxDate.toLocaleDateString()}` : 'N/A';
+                state.summaryStats.uniqueDomains = new Set(state.data.map(r => r.Domain)).size;
+
+                state.filters = {};
+                state.isLoading = false;
+                renderApp(); // Full render for the first time
+                fileParserWorker.postMessage({ type: 'filter', filters: state.filters }); // Initial filter
+            } else if (messageType === 'parse-error') {
+                state.isLoading = false;
+                state.error = `Failed to parse the file: ${e.data.error}`;
+                renderApp();
+            } else if (messageType === 'filter-success') {
+                state.filteredData = e.data.filteredData;
+                updateUI();
+            }
+        };
         renderApp();
 
     </script>
