@@ -142,7 +142,7 @@
         function renderSidebar() {
             const options = getFilterOptions();
             const standardKeys = Object.keys(options).filter(k => !state.customMetricKeys.includes(k));
-            const customKeys = state.customMetricKeys.filter(k => options[k]);
+            const customKeys = Object.keys(options).filter(k => state.customMetricKeys.includes(k));
             
             const renderMultiSelect = (key, values) => {
                 const selectedValues = state.filters[key] || [];
@@ -204,9 +204,9 @@
         
         function renderTableContent() {
             const paginatedData = getPaginatedAndSortedData();
-            const displayHeaders = state.headers.filter(h => h !== 'Custom Metrics');
+            const displayHeaders = state.headers.filter(h => h.toLowerCase() !== 'custom metrics');
             const getSortIndicator = (key) => (state.sortConfig.key !== key) ? '' : (state.sortConfig.direction === 'ascending' ? ' ▲' : ' ▼');
-            return `<table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50 sticky top-0 z-10"><tr>${displayHeaders.map(header => `<th data-sort-key="${header}" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer whitespace-nowrap">${header}${getSortIndicator(header)}</th>`).join('')}${state.customMetricKeys.map(key => `<th data-sort-key="${key}" class="px-6 py-3 text-left text-xs font-medium text-green-600 bg-green-50 uppercase tracking-wider cursor-pointer whitespace-nowrap">${key}${getSortIndicator(key)}</th>`).join('')}</tr></thead><tbody class="bg-white divide-y divide-gray-200">${paginatedData.length > 0 ? paginatedData.map((row) => `<tr>${displayHeaders.map(header => `<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">${String(row[header] ?? '')}</td>`).join('')}${state.customMetricKeys.map(key => `<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 bg-green-50">${String(row[key] ?? '')}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${displayHeaders.length + state.customMetricKeys.length}" class="text-center py-10 text-gray-500">No conversations match the current filters.</td></tr>`}</tbody></table>`;
+            return `<table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50 sticky top-0 z-10"><tr>${displayHeaders.map(header => `<th data-sort-key="${header}" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer whitespace-nowrap">${header}${getSortIndicator(header)}</th>`).join('')}${state.customMetricKeys.map(key => `<th data-sort-key="${key}" class="px-6 py-3 text-left text-xs font-medium text-green-600 bg-green-50 uppercase tracking-wider cursor-pointer whitespace-nowrap">${key}${getSortIndicator(key)}</th>`).join('')}</tr></thead><tbody class="bg-white divide-y divide-gray-200">${paginatedData.length > 0 ? paginatedData.map((row) => `<tr>${displayHeaders.map(header => `<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">${String(row[header.toLowerCase()] ?? '')}</td>`).join('')}${state.customMetricKeys.map(key => `<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 bg-green-50">${String(row[key.toLowerCase()] ?? '')}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${displayHeaders.length + state.customMetricKeys.length}" class="text-center py-10 text-gray-500">No conversations match the current filters.</td></tr>`}</tbody></table>`;
         }
 
         function renderPaginationControls() {
@@ -238,8 +238,9 @@
             let sortableData = [...state.filteredData];
             const { key, direction } = state.sortConfig;
             if (key !== null) {
+                const lowerCaseKey = key.toLowerCase();
                 sortableData.sort((a, b) => {
-                    const valA = a[key]; const valB = b[key];
+                    const valA = a[lowerCaseKey]; const valB = b[lowerCaseKey];
                     if (valA < valB) return direction === 'ascending' ? -1 : 1;
                     if (valA > valB) return direction === 'ascending' ? 1 : -1;
                     return 0;
@@ -256,7 +257,7 @@
             const options = {};
             const filterableColumns = ['Domain', 'Status', 'Channel', 'Escalated', 'Amelia Handled', 'Agent Handled', ...state.customMetricKeys];
             filterableColumns.forEach(header => {
-                const uniqueValues = [...new Set(state.data.map(row => row[header]).filter(val => val != null && val !== ''))];
+                const uniqueValues = [...new Set(state.data.map(row => row[header.toLowerCase()]).filter(val => val != null && val !== ''))];
                 if (uniqueValues.length > 0) options[header] = uniqueValues.sort();
             });
             return options;
@@ -285,7 +286,7 @@
 
         function downloadFilteredCSV() {
             if (state.filteredData.length === 0) { alert("No data to download."); return; }
-            const allHeaders = [...new Set([...state.headers.filter(h => h !== 'Custom Metrics'), ...state.customMetricKeys])];
+            const allHeaders = [...new Set([...state.headers.filter(h => h.toLowerCase() !== 'custom metrics'), ...state.customMetricKeys])];
             const csv = Papa.unparse({ fields: allHeaders, data: state.filteredData });
             const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement("a");
@@ -326,8 +327,8 @@
 
             const events = [];
             filteredData.forEach(row => {
-                const start = parseDate(row.Created);
-                const end = parseDate(row.Ended);
+                const start = parseDate(row.created);
+                const end = parseDate(row.ended);
                 if(start && end) {
                     events.push({ time: start.getTime(), type: 'start' });
                     events.push({ time: end.getTime(), type: 'end' });
@@ -336,10 +337,10 @@
                 const date = start;
                 if (!date) return;
                 const dateString = date.toISOString().slice(0, 10); // YYYY-MM-DD
-                const handleTime = parseHandleTime(row['Total Handle Time']);
+                const handleTime = parseHandleTime(row['total handle time']);
                 
-                const key = `${row.Domain || 'Unknown'}|${row.Channel || 'Unknown'}|${dateString}`;
-                if (!dailyAggregation[key]) dailyAggregation[key] = { domain: row.Domain || 'Unknown', channel: row.Channel || 'Unknown', date: dateString, count: 0 };
+                const key = `${row.domain || 'Unknown'}|${row.channel || 'Unknown'}|${dateString}`;
+                if (!dailyAggregation[key]) dailyAggregation[key] = { domain: row.domain || 'Unknown', channel: row.channel || 'Unknown', date: dateString, count: 0 };
                 dailyAggregation[key].count += 1;
 
                 if (handleTime !== null) {
@@ -350,7 +351,7 @@
                 
                 if (!containmentAggregation[dateString]) containmentAggregation[dateString] = { contained: 0, total: 0 };
                 containmentAggregation[dateString].total += 1;
-                if (row['Amelia Handled'] === 'true') {
+                if (row['amelia handled'] === 'true') {
                     containmentAggregation[dateString].contained += 1;
                 }
             });
@@ -391,7 +392,7 @@
         function renderConsumptionAnalysisModal(analysisData) {
             state.consumptionAnalysisState.originalData = analysisData.volumeData;
             const totalFiltered = state.filteredData.length;
-            const totalContained = state.filteredData.filter(r => r['Amelia Handled'] === 'true').length;
+            const totalContained = state.filteredData.filter(r => r['amelia handled'] === 'true').length;
             const overallContainmentRate = totalFiltered > 0 ? ((totalContained / totalFiltered) * 100).toFixed(1) : 0;
 
             const summaryCard = (title, value) => `<div class="bg-white p-3 rounded-lg text-center shadow-sm"><h4 class="text-sm font-medium text-gray-500">${title}</h4><p class="text-xl font-bold text-gray-800 mt-1">${value}</p></div>`;
@@ -549,7 +550,7 @@
                             if (!selectedValues || selectedValues.length === 0) {
                                 return true;
                             }
-                            return selectedValues.includes(String(row[key]));
+                            return selectedValues.includes(String(row[key.toLowerCase()]));
                         });
                     });
                 }
@@ -559,31 +560,39 @@
 
                     if (messageType === 'parse') {
                         const file = e.data.file;
-                        const standardHeaders = new Set(['Conversation Id', 'Domain', 'Created', 'Ended', 'Finished', 'Status', 'Channel', 'Primary Agent Email', 'Primary Agent Handle Time', 'Primary Agent Answer Speed', 'Pickup SLA Violation', 'Escalated', 'Escalation Queue', 'Escalation Reason', 'Abandoned', 'Amelia Handled', 'Amelia Abandoned', 'Agent Handled', 'Agent Abandoned', 'Escalate Abandoned', 'Total Handle Time', 'Executed BPNs', 'User Name', 'User Email', 'User External Uid', 'Disconnect Wait Time', 'After Conversation Time', 'After Conversation Violation', 'Resolution Codes', 'Custom Metrics']);
+                        const standardHeaders = new Set(['conversation id', 'domain', 'created', 'ended', 'finished', 'status', 'channel', 'primary agent email', 'primary agent handle time', 'primary agent answer speed', 'pickup sla violation', 'escalated', 'escalation queue', 'escalation reason', 'abandoned', 'amelia handled', 'amelia abandoned', 'agent handled', 'agent abandoned', 'escalate abandoned', 'total handle time', 'executed bpns', 'user name', 'user email', 'user external uid', 'disconnect wait time', 'after conversation time', 'after conversation violation', 'resolution codes', 'custom metrics']);
 
                         Papa.parse(file, {
                             header: true,
                             skipEmptyLines: true,
+                            transformHeader: h => h.trim().toLowerCase(),
                             complete: (results) => {
                                 if (results.errors && results.errors.length > 0 && results.data.length === 0) {
                                     self.postMessage({ type: 'parse-error', error: results.errors[0].message });
                                     return;
                                 }
                                 let parsedData = results.data;
-                                const headersFromFile = results.meta.fields;
+                                const originalHeaders = results.meta.fields; // These are now lowercase due to transformHeader
+                                
                                 const newCustomMetricKeys = new Set();
-                                const isOriginalFormat = headersFromFile.includes('Custom Metrics');
+                                const isOriginalFormat = originalHeaders.includes('custom metrics');
 
                                 if (isOriginalFormat) {
                                     parsedData = results.data.map(row => {
-                                        const customMetricsRaw = row['Custom Metrics'] || '';
+                                        const customMetricsRaw = row['custom metrics'] || '';
                                         const customMetrics = {};
                                         if (customMetricsRaw) {
                                             customMetricsRaw.split('||').forEach(metric => {
                                                 const [key, value] = metric.split('=');
                                                 if (key) {
-                                                    const trimmedKey = key.trim();
-                                                    customMetrics[trimmedKey] = value ? value.trim() : null;
+                                                    let trimmedKey = key.trim();
+                                                    let lowerTrimmedKey = trimmedKey.toLowerCase();
+                                                    
+                                                    if (standardHeaders.has(lowerTrimmedKey)) {
+                                                        trimmedKey = \`\${trimmedKey}_Custom\`;
+                                                        lowerTrimmedKey = trimmedKey.toLowerCase();
+                                                    }
+                                                    customMetrics[lowerTrimmedKey] = value ? value.trim() : null;
                                                     newCustomMetricKeys.add(trimmedKey);
                                                 }
                                             });
@@ -591,13 +600,13 @@
                                         return { ...row, ...customMetrics };
                                     });
                                 } else {
-                                    headersFromFile.forEach(header => { if (!standardHeaders.has(header)) newCustomMetricKeys.add(header); });
+                                    originalHeaders.forEach(header => { if (!standardHeaders.has(header)) newCustomMetricKeys.add(header); });
                                 }
                                 fullData = parsedData;
                                 self.postMessage({
                                     type: 'parse-success',
                                     data: fullData,
-                                    headers: headersFromFile,
+                                    headers: results.meta.fields, // Send original headers for display
                                     customMetricKeys: Array.from(newCustomMetricKeys)
                                 });
                             },
@@ -727,17 +736,17 @@
                     state.customMetricKeys = e.data.customMetricKeys;
                     
                     // Pre-calculate summary stats once
-                    const dates = state.data.map(row => parseDate(row.Created)).filter(d => d);
+                    const dates = state.data.map(row => parseDate(row.created)).filter(d => d);
                     const minDate = dates.length > 0 ? new Date(Math.min.apply(null, dates)) : null;
                     const maxDate = dates.length > 0 ? new Date(Math.max.apply(null, dates)) : null;
                     state.summaryStats.timeRange = minDate && maxDate ? `${minDate.toLocaleDateString()} - ${maxDate.toLocaleDateString()}` : 'N/A';
-                    state.summaryStats.uniqueDomains = new Set(state.data.map(r => r.Domain)).size;
-                    state.summaryStats.totalContained = state.data.filter(r => r['Amelia Handled'] === 'true').length;
+                    state.summaryStats.uniqueDomains = new Set(state.data.map(r => r.domain)).size;
+                    state.summaryStats.totalContained = state.data.filter(r => r['amelia handled'] === 'true').length;
 
                     let totalSeconds = 0;
                     let validCount = 0;
                     state.data.forEach(row => {
-                        const seconds = parseHandleTime(row['Total Handle Time']);
+                        const seconds = parseHandleTime(row['total handle time']);
                         if(seconds !== null) {
                             totalSeconds += seconds;
                             validCount++;
@@ -750,8 +759,8 @@
 
                     const events = [];
                     state.data.forEach(row => {
-                        const start = parseDate(row.Created);
-                        const end = parseDate(row.Ended);
+                        const start = parseDate(row.created);
+                        const end = parseDate(row.ended);
                         if(start && end) {
                             events.push({ time: start.getTime(), type: 'start' });
                             events.push({ time: end.getTime(), type: 'end' });
