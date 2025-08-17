@@ -69,7 +69,7 @@
             filteredData: [], // Memoized filtered data
             headers: [],
             customMetricKeys: [],
-            summaryStats: { timeRange: 'N/A', uniqueDomains: 0 }, // Pre-calculated stats
+            summaryStats: { timeRange: 'N/A', uniqueDomains: 0, peakConcurrency: 0, totalContained: 0, avgHandleTime: '00:00' }, // Pre-calculated stats
             filters: {},
             fileName: '',
             error: '',
@@ -178,13 +178,20 @@
         }
 
         function renderSummaryPanel() {
-            return `<div id="summary-panel" class="grid grid-cols-1 md:grid-cols-2 gap-4">${renderSummaryContent()}</div>`;
+            return `<div id="summary-panel" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">${renderSummaryContent()}</div>`;
         }
         
         function renderSummaryContent() {
-            const { timeRange, uniqueDomains } = state.summaryStats;
+            const { timeRange, peakConcurrency, totalContained, avgHandleTime } = state.summaryStats;
             const summaryCard = (title, value) => `<div class="bg-white p-5 rounded-xl shadow-sm border border-gray-200"><h3 class="text-sm font-medium text-gray-500">${title}</h3><p class="text-2xl font-bold text-gray-800 mt-1">${value}</p></div>`;
-            return `${summaryCard('Time Range', timeRange)}${summaryCard('Total Conversations', state.data.length.toLocaleString())}${summaryCard('Filtered Conversations', state.filteredData.length.toLocaleString())}${summaryCard('Unique Domains', uniqueDomains.toLocaleString())}`;
+            return `
+                ${summaryCard('Time Range', timeRange)}
+                ${summaryCard('Total Conversations', state.data.length.toLocaleString())}
+                ${summaryCard('Filtered Conversations', state.filteredData.length.toLocaleString())}
+                ${summaryCard('Peak Concurrency', peakConcurrency.toLocaleString())}
+                ${summaryCard('Total Contained', totalContained.toLocaleString())}
+                ${summaryCard('Avg. Handle Time', avgHandleTime)}
+            `;
         }
         
         function renderMainChart() {
@@ -271,6 +278,8 @@
             if (state.mainChartInstance) { state.mainChartInstance.destroy(); state.mainChartInstance = null; }
             closeConsumptionAnalysisModal();
             Object.assign(state, { data: [], filteredData: [], headers: [], customMetricKeys: [], filters: {}, fileName: '', error: '', isLoading: false, pagination: { currentPage: 1, rowsPerPage: 100 } });
+            if (fileParserWorker) fileParserWorker.terminate();
+            setupAndAttachWorker();
             renderApp();
         }
 
@@ -313,11 +322,18 @@
         function transformDataForDeeperAnalysis(filteredData) {
             const dailyAggregation = {};
             const handleTimeAggregation = {};
-            const contained = filteredData.filter(r => r['Amelia Handled'] === 'true').length;
-            const notContained = filteredData.length - contained;
+            const containmentAggregation = {};
 
+            const events = [];
             filteredData.forEach(row => {
-                const date = parseDate(row.Created);
+                const start = parseDate(row.Created);
+                const end = parseDate(row.Ended);
+                if(start && end) {
+                    events.push({ time: start.getTime(), type: 'start' });
+                    events.push({ time: end.getTime(), type: 'end' });
+                }
+
+                const date = start;
                 if (!date) return;
                 const dateString = date.toISOString().slice(0, 10); // YYYY-MM-DD
                 const handleTime = parseHandleTime(row['Total Handle Time']);
@@ -331,13 +347,36 @@
                     handleTimeAggregation[dateString].totalSeconds += handleTime;
                     handleTimeAggregation[dateString].count += 1;
                 }
+                
+                if (!containmentAggregation[dateString]) containmentAggregation[dateString] = { contained: 0, total: 0 };
+                containmentAggregation[dateString].total += 1;
+                if (row['Amelia Handled'] === 'true') {
+                    containmentAggregation[dateString].contained += 1;
+                }
             });
+            
+            events.sort((a,b) => a.time - b.time);
+            let maxConcurrency = 0;
+            let currentConcurrency = 0;
+            for(const event of events) {
+                if(event.type === 'start') {
+                    currentConcurrency++;
+                    if(currentConcurrency > maxConcurrency) maxConcurrency = currentConcurrency;
+                } else {
+                    currentConcurrency--;
+                }
+            }
 
             const handleTimeData = Object.entries(handleTimeAggregation).map(([date, data]) => ({
                 date, avgMinutes: (data.totalSeconds / data.count) / 60
             })).sort((a,b) => new Date(a.date) - new Date(b.date));
 
-            return { volumeData: Object.values(dailyAggregation), containmentData: { contained, notContained }, handleTimeData: handleTimeData };
+            const containmentTrendData = Object.entries(containmentAggregation).map(([date, data]) => ({
+                date,
+                rate: data.total > 0 ? (data.contained / data.total) * 100 : 0
+            })).sort((a,b) => new Date(a.date) - new Date(b.date));
+
+            return { volumeData: Object.values(dailyAggregation), handleTimeData, containmentTrendData, peakConcurrency: maxConcurrency };
         }
         
         function parseHandleTime(timeStr) {
@@ -351,7 +390,12 @@
 
         function renderConsumptionAnalysisModal(analysisData) {
             state.consumptionAnalysisState.originalData = analysisData.volumeData;
-            modalRoot.innerHTML = `<div id="ca-modal-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4 opacity-0"><div id="ca-modal-container" class="bg-white rounded-2xl shadow-2xl w-full max-w-7xl h-[90vh] flex flex-col transform scale-95"><div class="p-4 border-b flex justify-between items-center flex-shrink-0"><h2 class="text-2xl font-bold text-gray-800">Deeper Analysis</h2><div class="flex items-center gap-4"><button id="ca-download-report-btn" class="px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700">Download Report</button><button id="ca-close-modal-btn" class="p-2 rounded-full hover:bg-gray-200">${icons.x}</button></div></div><div class="flex-grow p-6 overflow-y-auto"><div class="grid grid-cols-1 lg:grid-cols-2 gap-6"><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Containment Rate</h3><div style="height: 250px; max-width: 250px; margin: auto;"><canvas id="ca-containment-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Avg. Handle Time Trend (Minutes)</h3><div style="height: 250px;"><canvas id="ca-handle-time-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Daily Conversation Volume</h3><div style="height: 250px;"><canvas id="ca-daily-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Weekly Conversation Volume</h3><div style="height: 250px;"><canvas id="ca-weekly-chart"></canvas></div></div></div></div></div></div>`;
+            const totalFiltered = state.filteredData.length;
+            const totalContained = state.filteredData.filter(r => r['Amelia Handled'] === 'true').length;
+            const overallContainmentRate = totalFiltered > 0 ? ((totalContained / totalFiltered) * 100).toFixed(1) : 0;
+
+            const summaryCard = (title, value) => `<div class="bg-white p-3 rounded-lg text-center shadow-sm"><h4 class="text-sm font-medium text-gray-500">${title}</h4><p class="text-xl font-bold text-gray-800 mt-1">${value}</p></div>`;
+            modalRoot.innerHTML = `<div id="ca-modal-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4 opacity-0"><div id="ca-modal-container" class="bg-white rounded-2xl shadow-2xl w-full max-w-7xl h-[90vh] flex flex-col transform scale-95"><div class="p-4 border-b flex justify-between items-center flex-shrink-0"><h2 class="text-2xl font-bold text-gray-800">Deeper Analysis</h2><div class="flex items-center gap-4"><button id="ca-download-report-btn" class="px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700">Download Report</button><button id="ca-close-modal-btn" class="p-2 rounded-full hover:bg-gray-200">${icons.x}</button></div></div><div class="flex-grow p-6 overflow-y-auto"><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">${summaryCard('Filtered Conversations', totalFiltered.toLocaleString())}${summaryCard('Filtered Peak Concurrency', analysisData.peakConcurrency)}${summaryCard('Overall Containment Rate', `${overallContainmentRate}%`)}</div><div class="grid grid-cols-1 lg:grid-cols-2 gap-6"><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Containment Rate Trend</h3><div style="height: 250px;"><canvas id="ca-containment-trend-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Avg. Handle Time Trend (Minutes)</h3><div style="height: 250px;"><canvas id="ca-handle-time-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Daily Conversation Volume</h3><div style="height: 250px;"><canvas id="ca-daily-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Weekly Conversation Volume</h3><div style="height: 250px;"><canvas id="ca-weekly-chart"></canvas></div></div></div></div></div></div>`;
             
             setTimeout(() => {
                 document.getElementById('ca-modal-overlay').classList.remove('opacity-0');
@@ -378,20 +422,21 @@
         }
         
         function setupConsumptionAnalysis(data) {
-            ca_displayContainmentChart(data.containmentData);
+            ca_displayContainmentTrendChart(data.containmentTrendData);
             ca_displayHandleTimeChart(data.handleTimeData);
             ca_displayDailyChart(data.volumeData);
             ca_displayWeeklyChart(data.volumeData);
         }
 
-        function ca_displayContainmentChart(containmentData) {
-            const { contained, notContained } = containmentData;
-            const chartEl = document.getElementById('ca-containment-chart');
+        function ca_displayContainmentTrendChart(containmentTrendData) {
+            const chartEl = document.getElementById('ca-containment-trend-chart');
             if (!chartEl) return;
+            const labels = containmentTrendData.map(d => d.date);
+            const data = containmentTrendData.map(d => d.rate);
             state.consumptionAnalysisState.containmentChart = new Chart(chartEl, {
-                type: 'doughnut',
-                data: { labels: ['Contained', 'Not Contained'], datasets: [{ data: [contained, notContained], backgroundColor: ['#10b981', '#ef4444'], borderWidth: 0 }] },
-                options: { responsive: true, maintainAspectRatio: true, cutout: '60%', plugins: { legend: { position: 'bottom' } } }
+                type: 'line',
+                data: { labels: labels, datasets: [{ label: 'Containment Rate (%)', data: data, borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', fill: true, tension: 0.2 }] },
+                options: { responsive: true, maintainAspectRatio: false, scales: { x: { type: 'time', time: { unit: 'day' } }, y: { beginAtZero: true, max: 100, title: { display: true, text: 'Containment (%)' } } }, plugins: { legend: { display: false } } }
             });
         }
 
@@ -478,7 +523,7 @@
             };
             doc.addPage();
             let yPos = 15;
-            yPos = await addImageToPdf(document.getElementById('ca-containment-chart').parentElement, doc, yPos, 'Containment Rate');
+            yPos = await addImageToPdf(document.getElementById('ca-containment-trend-chart').parentElement, doc, yPos, 'Containment Rate Trend');
             yPos = await addImageToPdf(document.getElementById('ca-handle-time-chart').parentElement, doc, yPos, 'Avg. Handle Time Trend');
             doc.addPage();
             yPos = 15;
@@ -582,69 +627,69 @@
         }
 
         function setupDashboardEventListeners() {
-            document.getElementById('toggle-sidebar-btn').addEventListener('click', () => { 
-                state.isSidebarOpen = !state.isSidebarOpen; 
-                document.getElementById('sidebar').classList.toggle('hidden');
-                document.getElementById('sidebar').classList.toggle('flex');
-                document.getElementById('toggle-sidebar-btn').innerHTML = `<span class="w-6 h-6 text-gray-600 inline-block">${state.isSidebarOpen ? icons.x : icons.filter}</span>`;
-            });
-            document.getElementById('reset-app-btn').addEventListener('click', resetApp);
-            
-            const sidebar = document.getElementById('sidebar');
-            if(sidebar) {
-                 sidebar.addEventListener('click', (e) => {
-                    const checkbox = e.target.closest('input[type="checkbox"]');
-                    const header = e.target.closest('[data-collapsible-key]');
+            // Use event delegation on a stable parent
+            appRoot.addEventListener('click', (e) => {
+                const toggleBtn = e.target.closest('#toggle-sidebar-btn');
+                const resetBtn = e.target.closest('#reset-app-btn');
+                const prevPageBtn = e.target.closest('#prev-page-btn');
+                const nextPageBtn = e.target.closest('#next-page-btn');
+                const clearFiltersBtn = e.target.closest('#clear-filters-btn');
+                const downloadCsvBtn = e.target.closest('#download-csv-btn');
+                const analysisBtn = e.target.closest('#deeper-analysis-btn');
+                const collapsibleHeader = e.target.closest('[data-collapsible-key]');
+                const tableHeader = e.target.closest('th[data-sort-key]');
 
-                    if (checkbox) {
-                        const key = checkbox.dataset.filterKey;
-                        const checkedBoxes = document.querySelectorAll(`input[data-filter-key="${key}"]:checked`);
-                        state.filters[key] = Array.from(checkedBoxes).map(cb => cb.value);
-                        state.pagination.currentPage = 1; 
-                        fileParserWorker.postMessage({ type: 'filter', filters: state.filters });
-                    } else if (header) {
-                        const container = header.nextElementSibling;
-                        container.classList.toggle('hidden');
-                        const icon = header.querySelector('.collapse-icon');
-                        icon.innerHTML = container.classList.contains('hidden') ? icons.chevronRight : icons.chevronDown;
-                    }
-                });
-            }
-
-            document.getElementById('clear-filters-btn').addEventListener('click', () => { 
-                document.querySelectorAll('#sidebar input[type="checkbox"]').forEach(cb => cb.checked = false);
-                state.filters = {};
-                state.pagination.currentPage = 1;
-                fileParserWorker.postMessage({ type: 'filter', filters: state.filters });
-            });
-            document.getElementById('download-csv-btn').addEventListener('click', downloadFilteredCSV);
-            document.getElementById('deeper-analysis-btn').addEventListener('click', () => {
-                const analysisData = transformDataForDeeperAnalysis(state.filteredData);
-                renderConsumptionAnalysisModal(analysisData);
-            });
-            const tableWrapper = document.getElementById('data-table-wrapper');
-            if (tableWrapper) {
-                tableWrapper.addEventListener('click', (e) => {
-                    const th = e.target.closest('th[data-sort-key]');
-                    if (!th) return;
-                    const key = th.dataset.sortKey;
+                if (toggleBtn) {
+                    state.isSidebarOpen = !state.isSidebarOpen; 
+                    document.getElementById('sidebar').classList.toggle('hidden');
+                    document.getElementById('sidebar').classList.toggle('flex');
+                    toggleBtn.innerHTML = `<span class="w-6 h-6 text-gray-600 inline-block">${state.isSidebarOpen ? icons.x : icons.filter}</span>`;
+                }
+                if (resetBtn) resetApp();
+                if (prevPageBtn) {
+                    state.pagination.currentPage--;
+                    updateDataTable();
+                }
+                if (nextPageBtn) {
+                    state.pagination.currentPage++;
+                    updateDataTable();
+                }
+                if (clearFiltersBtn) {
+                    document.querySelectorAll('#sidebar input[type="checkbox"]').forEach(cb => cb.checked = false);
+                    state.filters = {};
+                    state.pagination.currentPage = 1;
+                    fileParserWorker.postMessage({ type: 'filter', filters: state.filters });
+                }
+                if (downloadCsvBtn) downloadFilteredCSV();
+                if (analysisBtn && !analysisBtn.disabled) {
+                    const analysisData = transformDataForDeeperAnalysis(state.filteredData);
+                    renderConsumptionAnalysisModal(analysisData);
+                }
+                if (collapsibleHeader) {
+                    const container = collapsibleHeader.nextElementSibling;
+                    container.classList.toggle('hidden');
+                    const icon = collapsibleHeader.querySelector('.collapse-icon');
+                    icon.innerHTML = container.classList.contains('hidden') ? icons.chevronRight : icons.chevronDown;
+                }
+                if (tableHeader) {
+                    const key = tableHeader.dataset.sortKey;
                     let direction = 'ascending';
                     if(state.sortConfig.key === key && state.sortConfig.direction === 'ascending') direction = 'descending';
                     state.sortConfig = { key, direction };
                     state.pagination.currentPage = 1;
                     updateDataTable();
-                });
-            }
-            const paginationContainer = document.getElementById('pagination-controls-container');
-            if(paginationContainer) {
-                paginationContainer.addEventListener('click', (e) => {
-                    if (e.target.id === 'prev-page-btn') {
-                        state.pagination.currentPage--;
-                        updateDataTable();
-                    }
-                    if (e.target.id === 'next-page-btn') {
-                        state.pagination.currentPage++;
-                        updateDataTable();
+                }
+            });
+
+            const sidebar = document.getElementById('sidebar');
+            if(sidebar) {
+                 sidebar.addEventListener('change', (e) => {
+                    if (e.target.matches('input[type="checkbox"]')) {
+                        const key = e.target.dataset.filterKey;
+                        const checkedBoxes = document.querySelectorAll(`input[data-filter-key="${key}"]:checked`);
+                        state.filters[key] = Array.from(checkedBoxes).map(cb => cb.value);
+                        state.pagination.currentPage = 1; 
+                        fileParserWorker.postMessage({ type: 'filter', filters: state.filters });
                     }
                 });
             }
@@ -671,36 +716,80 @@
                 btn.classList.toggle('cursor-not-allowed', !hasActiveFilters);
             }
         }
+        
+        function setupAndAttachWorker() {
+            fileParserWorker = setupFileParserWorker();
+            fileParserWorker.onmessage = (e) => {
+                const messageType = e.data.type;
+                if (messageType === 'parse-success') {
+                    state.data = e.data.data;
+                    state.headers = e.data.headers;
+                    state.customMetricKeys = e.data.customMetricKeys;
+                    
+                    // Pre-calculate summary stats once
+                    const dates = state.data.map(row => parseDate(row.Created)).filter(d => d);
+                    const minDate = dates.length > 0 ? new Date(Math.min.apply(null, dates)) : null;
+                    const maxDate = dates.length > 0 ? new Date(Math.max.apply(null, dates)) : null;
+                    state.summaryStats.timeRange = minDate && maxDate ? `${minDate.toLocaleDateString()} - ${maxDate.toLocaleDateString()}` : 'N/A';
+                    state.summaryStats.uniqueDomains = new Set(state.data.map(r => r.Domain)).size;
+                    state.summaryStats.totalContained = state.data.filter(r => r['Amelia Handled'] === 'true').length;
+
+                    let totalSeconds = 0;
+                    let validCount = 0;
+                    state.data.forEach(row => {
+                        const seconds = parseHandleTime(row['Total Handle Time']);
+                        if(seconds !== null) {
+                            totalSeconds += seconds;
+                            validCount++;
+                        }
+                    });
+                    const avgSeconds = validCount > 0 ? totalSeconds / validCount : 0;
+                    const minutes = Math.floor(avgSeconds / 60).toString().padStart(2, '0');
+                    const seconds = Math.floor(avgSeconds % 60).toString().padStart(2, '0');
+                    state.summaryStats.avgHandleTime = `${minutes}:${seconds}`;
+
+                    const events = [];
+                    state.data.forEach(row => {
+                        const start = parseDate(row.Created);
+                        const end = parseDate(row.Ended);
+                        if(start && end) {
+                            events.push({ time: start.getTime(), type: 'start' });
+                            events.push({ time: end.getTime(), type: 'end' });
+                        }
+                    });
+                    events.sort((a,b) => a.time - b.time);
+                    let maxConcurrency = 0;
+                    let currentConcurrency = 0;
+                    for(const event of events) {
+                        if(event.type === 'start') {
+                            currentConcurrency++;
+                            if(currentConcurrency > maxConcurrency) {
+                                maxConcurrency = currentConcurrency;
+                            }
+                        } else {
+                            currentConcurrency--;
+                        }
+                    }
+                    state.summaryStats.peakConcurrency = maxConcurrency;
+
+
+                    state.filters = {};
+                    state.isLoading = false;
+                    renderApp(); 
+                    fileParserWorker.postMessage({ type: 'filter', filters: state.filters });
+                } else if (messageType === 'parse-error') {
+                    state.isLoading = false;
+                    state.error = `Failed to parse the file: ${e.data.error}`;
+                    renderApp();
+                } else if (messageType === 'filter-success') {
+                    state.filteredData = e.data.filteredData;
+                    updateUI();
+                }
+            };
+        }
 
         // --- INITIALIZATION ---
-        fileParserWorker = setupFileParserWorker();
-        fileParserWorker.onmessage = (e) => {
-            const messageType = e.data.type;
-            if (messageType === 'parse-success') {
-                state.data = e.data.data;
-                state.headers = e.data.headers;
-                state.customMetricKeys = e.data.customMetricKeys;
-                
-                // Pre-calculate summary stats once
-                const dates = state.data.map(row => parseDate(row.Created)).filter(d => d);
-                const minDate = dates.length > 0 ? new Date(Math.min.apply(null, dates)) : null;
-                const maxDate = dates.length > 0 ? new Date(Math.max.apply(null, dates)) : null;
-                state.summaryStats.timeRange = minDate && maxDate ? `${minDate.toLocaleDateString()} - ${maxDate.toLocaleDateString()}` : 'N/A';
-                state.summaryStats.uniqueDomains = new Set(state.data.map(r => r.Domain)).size;
-
-                state.filters = {};
-                state.isLoading = false;
-                renderApp(); // Full render for the first time
-                fileParserWorker.postMessage({ type: 'filter', filters: state.filters }); // Initial filter
-            } else if (messageType === 'parse-error') {
-                state.isLoading = false;
-                state.error = `Failed to parse the file: ${e.data.error}`;
-                renderApp();
-            } else if (messageType === 'filter-success') {
-                state.filteredData = e.data.filteredData;
-                updateUI();
-            }
-        };
+        setupAndAttachWorker();
         renderApp();
 
     </script>
