@@ -255,7 +255,9 @@
         function getFilterOptions() {
             if (state.data.length === 0) return {};
             const options = {};
-            const filterableColumns = ['Domain', 'Status', 'Channel', 'Escalated', 'Amelia Handled', 'Agent Handled', ...state.customMetricKeys];
+            const allFilterableKeys = [...new Set([...state.headers, ...state.customMetricKeys])];
+            const filterableColumns = allFilterableKeys.filter(key => !['Custom Metrics', 'Conversation Id'].map(k=>k.toLowerCase()).includes(key.toLowerCase()));
+            
             filterableColumns.forEach(header => {
                 const uniqueValues = [...new Set(state.data.map(row => row[header.toLowerCase()]).filter(val => val != null && val !== ''))];
                 if (uniqueValues.length > 0) options[header] = uniqueValues.sort();
@@ -287,7 +289,17 @@
         function downloadFilteredCSV() {
             if (state.filteredData.length === 0) { alert("No data to download."); return; }
             const allHeaders = [...new Set([...state.headers.filter(h => h.toLowerCase() !== 'custom metrics'), ...state.customMetricKeys])];
-            const csv = Papa.unparse({ fields: allHeaders, data: state.filteredData });
+            
+            // Create a temporary data array with original header casing for export
+            const exportData = state.filteredData.map(row => {
+                const newRow = {};
+                for (const header of allHeaders) {
+                    newRow[header] = row[header.toLowerCase()];
+                }
+                return newRow;
+            });
+
+            const csv = Papa.unparse({ fields: allHeaders, data: exportData });
             const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement("a");
             link.href = URL.createObjectURL(blob);
@@ -565,20 +577,26 @@
                         Papa.parse(file, {
                             header: true,
                             skipEmptyLines: true,
-                            transformHeader: h => h.trim().toLowerCase(),
                             complete: (results) => {
                                 if (results.errors && results.errors.length > 0 && results.data.length === 0) {
                                     self.postMessage({ type: 'parse-error', error: results.errors[0].message });
                                     return;
                                 }
-                                let parsedData = results.data;
-                                const originalHeaders = results.meta.fields; // These are now lowercase due to transformHeader
-                                
+                                const originalHeaders = results.meta.fields;
+                                let parsedData = results.data.map(row => {
+                                    const newRow = {};
+                                    for (const key in row) {
+                                        newRow[key.trim().toLowerCase()] = row[key];
+                                    }
+                                    return newRow;
+                                });
+
+                                const lowerCaseHeaders = originalHeaders.map(h => h.trim().toLowerCase());
                                 const newCustomMetricKeys = new Set();
-                                const isOriginalFormat = originalHeaders.includes('custom metrics');
+                                const isOriginalFormat = lowerCaseHeaders.includes('custom metrics');
 
                                 if (isOriginalFormat) {
-                                    parsedData = results.data.map(row => {
+                                    parsedData = parsedData.map(row => {
                                         const customMetricsRaw = row['custom metrics'] || '';
                                         const customMetrics = {};
                                         if (customMetricsRaw) {
@@ -592,21 +610,21 @@
                                                         trimmedKey = \`\${trimmedKey}_Custom\`;
                                                         lowerTrimmedKey = trimmedKey.toLowerCase();
                                                     }
-                                                    customMetrics[lowerTrimmedKey] = value ? value.trim() : null;
+                                                    row[lowerTrimmedKey] = value ? value.trim() : null;
                                                     newCustomMetricKeys.add(trimmedKey);
                                                 }
                                             });
                                         }
-                                        return { ...row, ...customMetrics };
+                                        return row;
                                     });
                                 } else {
-                                    originalHeaders.forEach(header => { if (!standardHeaders.has(header)) newCustomMetricKeys.add(header); });
+                                    originalHeaders.forEach(header => { if (!standardHeaders.has(header.toLowerCase())) newCustomMetricKeys.add(header); });
                                 }
                                 fullData = parsedData;
                                 self.postMessage({
                                     type: 'parse-success',
                                     data: fullData,
-                                    headers: results.meta.fields, // Send original headers for display
+                                    headers: originalHeaders, 
                                     customMetricKeys: Array.from(newCustomMetricKeys)
                                 });
                             },
