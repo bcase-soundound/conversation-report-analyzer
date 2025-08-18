@@ -65,11 +65,12 @@
     <script type="module">
         // --- STATE MANAGEMENT ---
         let state = {
-            data: [],
-            filteredData: [], // Memoized filtered data
+            data: [], // This will now hold only the current page of data
+            totalFilteredRows: 0,
             headers: [],
             customMetricKeys: [],
-            summaryStats: { timeRange: 'N/A', uniqueDomains: 0, peakConcurrency: 0, totalContained: 0, avgHandleTime: '00:00' }, // Pre-calculated stats
+            filterOptions: {},
+            summaryStats: { timeRange: 'N/A', totalRows: 0, peakConcurrency: 0, totalContained: 0, avgHandleTime: '00:00' }, // Pre-calculated stats
             filters: {},
             fileName: '',
             error: '',
@@ -83,7 +84,6 @@
                 weeklyChart: null,
                 containmentChart: null,
                 handleTimeChart: null,
-                originalData: [],
             },
         };
 
@@ -110,12 +110,14 @@
                  appRoot.innerHTML = renderUploader();
                  return;
             }
-            if (state.data.length === 0) {
+            if (state.summaryStats.totalRows === 0) {
                 appRoot.innerHTML = renderUploader();
                 setupUploaderEventListeners();
             } else {
                 appRoot.innerHTML = renderDashboard();
-                setupDashboardEventListeners();
+                setupMainChart();
+                updateUI();
+                setupDashboardEventListeners(); // Re-attach listeners after full dashboard render
             }
         }
         
@@ -140,7 +142,7 @@
         }
 
         function renderSidebar() {
-            const options = getFilterOptions();
+            const options = state.filterOptions;
             const standardKeys = Object.keys(options).filter(k => !state.customMetricKeys.includes(k));
             const customKeys = Object.keys(options).filter(k => state.customMetricKeys.includes(k));
             
@@ -165,7 +167,7 @@
                 </div>
             `;
 
-            return `<aside id="sidebar" class="w-80 bg-white p-6 border-r border-gray-200 flex-col shadow-lg ${state.isSidebarOpen ? 'flex' : 'hidden'}" style="height: 100vh;"><div class="flex-grow overflow-y-auto sidebar-scroll pr-2"><h2 class="text-2xl font-bold text-gray-800 mb-6 flex items-center"><span class="mr-2 text-blue-600">${icons.filter}</span>Filters</h2><div class="space-y-6"><div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Standard Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-blue-200">${standardKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>${customKeys.length > 0 ? `<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Custom Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-green-200">${customKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>` : ''}</div></div><div class="flex-shrink-0 pt-4 border-t mt-4 space-y-2"><button id="deeper-analysis-btn" class="w-full py-2 px-4 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold transition-colors flex items-center justify-center"><span class="w-5 h-5 mr-2">${icons.search}</span>Deeper Analysis</button><button id="download-csv-btn" class="w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold transition-colors flex items-center justify-center"><span class="w-5 h-5 mr-2">${icons.download}</span>Download Filtered</button><button id="clear-filters-btn" class="w-full py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold transition-colors">Clear All Filters</button></div></aside>`;
+            return `<aside id="sidebar" class="w-80 bg-white p-6 border-r border-gray-200 flex-col shadow-lg ${state.isSidebarOpen ? 'flex' : 'hidden'}" style="height: 100vh;"><div class="flex-grow overflow-y-auto sidebar-scroll pr-2"><h2 class="text-2xl font-bold text-gray-800 mb-6 flex items-center"><span class="mr-2 text-blue-600">${icons.filter}</span>Filters</h2><div class="space-y-6"><div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Standard Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-blue-200">${standardKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>${customKeys.length > 0 ? `<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Custom Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-green-200">${customKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>` : ''}</div></div><div class="flex-shrink-0 pt-4 border-t mt-4 space-y-2"><button id="deeper-analysis-btn" class="w-full py-2 px-4 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold transition-colors flex items-center justify-center opacity-50 cursor-not-allowed" disabled><span class="w-5 h-5 mr-2">${icons.search}</span>Deeper Analysis</button><button id="download-csv-btn" class="w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold transition-colors flex items-center justify-center"><span class="w-5 h-5 mr-2">${icons.download}</span>Download Filtered</button><button id="clear-filters-btn" class="w-full py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold transition-colors">Clear All Filters</button></div></aside>`;
         }
         
         function renderHeader() {
@@ -182,12 +184,12 @@
         }
         
         function renderSummaryContent() {
-            const { timeRange, peakConcurrency, totalContained, avgHandleTime } = state.summaryStats;
+            const { timeRange, peakConcurrency, totalContained, avgHandleTime, totalRows } = state.summaryStats;
             const summaryCard = (title, value) => `<div class="bg-white p-5 rounded-xl shadow-sm border border-gray-200"><h3 class="text-sm font-medium text-gray-500">${title}</h3><p class="text-2xl font-bold text-gray-800 mt-1">${value}</p></div>`;
             return `
                 ${summaryCard('Time Range', timeRange)}
-                ${summaryCard('Total Conversations', state.data.length.toLocaleString())}
-                ${summaryCard('Filtered Conversations', state.filteredData.length.toLocaleString())}
+                ${summaryCard('Total Conversations', totalRows.toLocaleString())}
+                ${summaryCard('Filtered Conversations', state.totalFilteredRows.toLocaleString())}
                 ${summaryCard('Peak Concurrency', peakConcurrency.toLocaleString())}
                 ${summaryCard('Total Contained', totalContained.toLocaleString())}
                 ${summaryCard('Avg. Handle Time', avgHandleTime)}
@@ -203,15 +205,14 @@
         }
         
         function renderTableContent() {
-            const paginatedData = getPaginatedAndSortedData();
             const displayHeaders = state.headers.filter(h => h.toLowerCase() !== 'custom metrics');
             const getSortIndicator = (key) => (state.sortConfig.key !== key) ? '' : (state.sortConfig.direction === 'ascending' ? ' ▲' : ' ▼');
-            return `<table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50 sticky top-0 z-10"><tr>${displayHeaders.map(header => `<th data-sort-key="${header}" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer whitespace-nowrap">${header}${getSortIndicator(header)}</th>`).join('')}${state.customMetricKeys.map(key => `<th data-sort-key="${key}" class="px-6 py-3 text-left text-xs font-medium text-green-600 bg-green-50 uppercase tracking-wider cursor-pointer whitespace-nowrap">${key}${getSortIndicator(key)}</th>`).join('')}</tr></thead><tbody class="bg-white divide-y divide-gray-200">${paginatedData.length > 0 ? paginatedData.map((row) => `<tr>${displayHeaders.map(header => `<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">${String(row[header.toLowerCase()] ?? '')}</td>`).join('')}${state.customMetricKeys.map(key => `<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 bg-green-50">${String(row[key.toLowerCase()] ?? '')}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${displayHeaders.length + state.customMetricKeys.length}" class="text-center py-10 text-gray-500">No conversations match the current filters.</td></tr>`}</tbody></table>`;
+            return `<table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50 sticky top-0 z-10"><tr>${displayHeaders.map(header => `<th data-sort-key="${header}" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer whitespace-nowrap">${header}${getSortIndicator(header)}</th>`).join('')}${state.customMetricKeys.map(key => `<th data-sort-key="${key}" class="px-6 py-3 text-left text-xs font-medium text-green-600 bg-green-50 uppercase tracking-wider cursor-pointer whitespace-nowrap">${key}${getSortIndicator(key)}</th>`).join('')}</tr></thead><tbody class="bg-white divide-y divide-gray-200">${state.data.length > 0 ? state.data.map((row) => `<tr>${displayHeaders.map(header => `<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">${String(row[header.toLowerCase()] ?? '')}</td>`).join('')}${state.customMetricKeys.map(key => `<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 bg-green-50">${String(row[key.toLowerCase()] ?? '')}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${displayHeaders.length + state.customMetricKeys.length}" class="text-center py-10 text-gray-500">No conversations match the current filters.</td></tr>`}</tbody></table>`;
         }
 
         function renderPaginationControls() {
             const { currentPage, rowsPerPage } = state.pagination;
-            const totalRows = state.filteredData.length;
+            const totalRows = state.totalFilteredRows;
             const totalPages = Math.ceil(totalRows / rowsPerPage);
             const startRow = totalRows === 0 ? 0 : (currentPage - 1) * rowsPerPage + 1;
             const endRow = Math.min(currentPage * rowsPerPage, totalRows);
@@ -227,44 +228,6 @@
         }
         
         // --- LOGIC & DATA HANDLING ---
-        function parseDate(dateString) {
-            if (!dateString) return null;
-            const cleanDateString = dateString.replace(/\[.*\]/, '');
-            const date = new Date(cleanDateString);
-            return isNaN(date) ? null : date;
-        }
-        
-        function getPaginatedAndSortedData() {
-            let sortableData = [...state.filteredData];
-            const { key, direction } = state.sortConfig;
-            if (key !== null) {
-                const lowerCaseKey = key.toLowerCase();
-                sortableData.sort((a, b) => {
-                    const valA = a[lowerCaseKey]; const valB = b[lowerCaseKey];
-                    if (valA < valB) return direction === 'ascending' ? -1 : 1;
-                    if (valA > valB) return direction === 'ascending' ? 1 : -1;
-                    return 0;
-                });
-            }
-            const { currentPage, rowsPerPage } = state.pagination;
-            const start = (currentPage - 1) * rowsPerPage;
-            const end = start + rowsPerPage;
-            return sortableData.slice(start, end);
-        }
-
-        function getFilterOptions() {
-            if (state.data.length === 0) return {};
-            const options = {};
-            const allFilterableKeys = [...new Set([...state.headers, ...state.customMetricKeys])];
-            const filterableColumns = allFilterableKeys.filter(key => !['Custom Metrics', 'Conversation Id'].map(k=>k.toLowerCase()).includes(key.toLowerCase()));
-            
-            filterableColumns.forEach(header => {
-                const uniqueValues = [...new Set(state.data.map(row => row[header.toLowerCase()]).filter(val => val != null && val !== ''))];
-                if (uniqueValues.length > 0) options[header] = uniqueValues.sort();
-            });
-            return options;
-        }
-
         function handleFile(file) {
             if (!file) return;
             if (file.type !== 'text/csv') {
@@ -280,33 +243,17 @@
         function resetApp() {
             if (state.mainChartInstance) { state.mainChartInstance.destroy(); state.mainChartInstance = null; }
             closeConsumptionAnalysisModal();
-            Object.assign(state, { data: [], filteredData: [], headers: [], customMetricKeys: [], filters: {}, fileName: '', error: '', isLoading: false, pagination: { currentPage: 1, rowsPerPage: 100 } });
+            Object.assign(state, { data: [], totalFilteredRows: 0, headers: [], customMetricKeys: [], filterOptions: {}, filters: {}, fileName: '', error: '', isLoading: false, pagination: { currentPage: 1, rowsPerPage: 100 }, summaryStats: { totalRows: 0 } });
             if (fileParserWorker) fileParserWorker.terminate();
             setupAndAttachWorker();
             renderApp();
         }
 
-        function downloadFilteredCSV() {
-            if (state.filteredData.length === 0) { alert("No data to download."); return; }
-            const allHeaders = [...new Set([...state.headers.filter(h => h.toLowerCase() !== 'custom metrics'), ...state.customMetricKeys])];
-            
-            // Create a temporary data array with original header casing for export
-            const exportData = state.filteredData.map(row => {
-                const newRow = {};
-                for (const header of allHeaders) {
-                    newRow[header] = row[header.toLowerCase()];
-                }
-                return newRow;
-            });
-
-            const csv = Papa.unparse({ fields: allHeaders, data: exportData });
-            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement("a");
-            link.href = URL.createObjectURL(blob);
-            link.download = `filtered_${state.fileName}`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+        async function downloadFilteredCSV() {
+            if (state.totalFilteredRows === 0) { alert("No data to download."); return; }
+            // Tell the worker to start streaming the filtered data back
+            fileParserWorker.postMessage({ type: 'request-csv-string' });
+            // The result will be handled by the 'csv-string-data' message listener
         }
 
         // --- CHART UPDATE FUNCTIONS (OPTIMIZED) ---
@@ -318,12 +265,11 @@
                 data: { labels: ['Filtered Conversations', 'Other Conversations'], datasets: [{ data: [], backgroundColor: ['#3b82f6', '#e5e7eb'], hoverBackgroundColor: ['#2563eb', '#d1d5db'], borderWidth: 0 }] },
                 options: { responsive: true, maintainAspectRatio: false, cutout: '75%', plugins: { legend: { display: false }, tooltip: { enabled: true } } }
             });
-            updateMainChart();
         }
 
         function updateMainChart() {
             if (!state.mainChartInstance) return;
-            const total = state.data.length; const filtered = state.filteredData.length; const others = total - filtered;
+            const total = state.summaryStats.totalRows; const filtered = state.totalFilteredRows; const others = total - filtered;
             const percentage = total > 0 ? ((filtered / total) * 100).toFixed(1) : 0;
             
             state.mainChartInstance.data.datasets[0].data = [filtered, others];
@@ -332,83 +278,23 @@
         }
         
         // --- DEEPER ANALYSIS MODAL ---
-        function transformDataForDeeperAnalysis(filteredData) {
-            const dailyAggregation = {};
-            const handleTimeAggregation = {};
-            const containmentAggregation = {};
-
-            const events = [];
-            filteredData.forEach(row => {
-                const start = parseDate(row.created);
-                const end = parseDate(row.ended);
-                if(start && end) {
-                    events.push({ time: start.getTime(), type: 'start' });
-                    events.push({ time: end.getTime(), type: 'end' });
-                }
-
-                const date = start;
-                if (!date) return;
-                const dateString = date.toISOString().slice(0, 10); // YYYY-MM-DD
-                const handleTime = parseHandleTime(row['total handle time']);
-                
-                const key = `${row.domain || 'Unknown'}|${row.channel || 'Unknown'}|${dateString}`;
-                if (!dailyAggregation[key]) dailyAggregation[key] = { domain: row.domain || 'Unknown', channel: row.channel || 'Unknown', date: dateString, count: 0 };
-                dailyAggregation[key].count += 1;
-
-                if (handleTime !== null) {
-                    if (!handleTimeAggregation[dateString]) handleTimeAggregation[dateString] = { totalSeconds: 0, count: 0 };
-                    handleTimeAggregation[dateString].totalSeconds += handleTime;
-                    handleTimeAggregation[dateString].count += 1;
-                }
-                
-                if (!containmentAggregation[dateString]) containmentAggregation[dateString] = { contained: 0, total: 0 };
-                containmentAggregation[dateString].total += 1;
-                if (row['amelia handled'] === 'true') {
-                    containmentAggregation[dateString].contained += 1;
-                }
-            });
-            
-            events.sort((a,b) => a.time - b.time);
-            let maxConcurrency = 0;
-            let currentConcurrency = 0;
-            for(const event of events) {
-                if(event.type === 'start') {
-                    currentConcurrency++;
-                    if(currentConcurrency > maxConcurrency) maxConcurrency = currentConcurrency;
-                } else {
-                    currentConcurrency--;
-                }
+        // MODIFICATION: This function now just sends a message to the worker
+        function openDeeperAnalysis() {
+            const btn = document.getElementById('deeper-analysis-btn');
+            if(btn) {
+                btn.disabled = true;
+                btn.innerHTML = `<div class="loader !w-5 !h-5 !border-2 !border-t-blue-400 mr-2"></div>Analyzing...`;
             }
-
-            const handleTimeData = Object.entries(handleTimeAggregation).map(([date, data]) => ({
-                date, avgMinutes: (data.totalSeconds / data.count) / 60
-            })).sort((a,b) => new Date(a.date) - new Date(b.date));
-
-            const containmentTrendData = Object.entries(containmentAggregation).map(([date, data]) => ({
-                date,
-                rate: data.total > 0 ? (data.contained / data.total) * 100 : 0
-            })).sort((a,b) => new Date(a.date) - new Date(b.date));
-
-            return { volumeData: Object.values(dailyAggregation), handleTimeData, containmentTrendData, peakConcurrency: maxConcurrency };
-        }
-        
-        function parseHandleTime(timeStr) {
-            if (!timeStr || typeof timeStr !== 'string') return null;
-            const parts = timeStr.split(':');
-            if (parts.length !== 3) return null;
-            const [hours, minutes, seconds] = parts.map(Number);
-            if (isNaN(hours) || isNaN(minutes) || isNaN(seconds)) return null;
-            return hours * 3600 + minutes * 60 + seconds;
+            fileParserWorker.postMessage({ type: 'request-analysis' });
         }
 
+        // This function now receives the pre-aggregated data from the worker
         function renderConsumptionAnalysisModal(analysisData) {
             state.consumptionAnalysisState.originalData = analysisData.volumeData;
-            const totalFiltered = state.filteredData.length;
-            const totalContained = state.filteredData.filter(r => r['amelia handled'] === 'true').length;
-            const overallContainmentRate = totalFiltered > 0 ? ((totalContained / totalFiltered) * 100).toFixed(1) : 0;
+            const { filteredConversations, filteredPeakConcurrency, overallContainmentRate } = analysisData.summary;
 
             const summaryCard = (title, value) => `<div class="bg-white p-3 rounded-lg text-center shadow-sm"><h4 class="text-sm font-medium text-gray-500">${title}</h4><p class="text-xl font-bold text-gray-800 mt-1">${value}</p></div>`;
-            modalRoot.innerHTML = `<div id="ca-modal-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4 opacity-0"><div id="ca-modal-container" class="bg-white rounded-2xl shadow-2xl w-full max-w-7xl h-[90vh] flex flex-col transform scale-95"><div class="p-4 border-b flex justify-between items-center flex-shrink-0"><h2 class="text-2xl font-bold text-gray-800">Deeper Analysis</h2><div class="flex items-center gap-4"><button id="ca-download-report-btn" class="px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700">Download Report</button><button id="ca-close-modal-btn" class="p-2 rounded-full hover:bg-gray-200">${icons.x}</button></div></div><div class="flex-grow p-6 overflow-y-auto"><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">${summaryCard('Filtered Conversations', totalFiltered.toLocaleString())}${summaryCard('Filtered Peak Concurrency', analysisData.peakConcurrency)}${summaryCard('Overall Containment Rate', `${overallContainmentRate}%`)}</div><div class="grid grid-cols-1 lg:grid-cols-2 gap-6"><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Containment Rate Trend</h3><div style="height: 250px;"><canvas id="ca-containment-trend-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Avg. Handle Time Trend (Minutes)</h3><div style="height: 250px;"><canvas id="ca-handle-time-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Daily Conversation Volume</h3><div style="height: 250px;"><canvas id="ca-daily-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Weekly Conversation Volume</h3><div style="height: 250px;"><canvas id="ca-weekly-chart"></canvas></div></div></div></div></div></div>`;
+            modalRoot.innerHTML = `<div id="ca-modal-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4 opacity-0"><div id="ca-modal-container" class="bg-white rounded-2xl shadow-2xl w-full max-w-7xl h-[90vh] flex flex-col transform scale-95"><div class="p-4 border-b flex justify-between items-center flex-shrink-0"><h2 class="text-2xl font-bold text-gray-800">Deeper Analysis</h2><div class="flex items-center gap-4"><button id="ca-download-report-btn" class="px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700">Download Report</button><button id="ca-close-modal-btn" class="p-2 rounded-full hover:bg-gray-200">${icons.x}</button></div></div><div class="flex-grow p-6 overflow-y-auto"><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">${summaryCard('Filtered Conversations', filteredConversations.toLocaleString())}${summaryCard('Filtered Peak Concurrency', filteredPeakConcurrency)}${summaryCard('Overall Containment Rate', `${overallContainmentRate}%`)}</div><div class="grid grid-cols-1 lg:grid-cols-2 gap-6"><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Containment Rate Trend</h3><div style="height: 250px;"><canvas id="ca-containment-trend-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Avg. Handle Time Trend (Minutes)</h3><div style="height: 250px;"><canvas id="ca-handle-time-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Daily Conversation Volume</h3><div style="height: 250px;"><canvas id="ca-daily-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Weekly Conversation Volume</h3><div style="height: 250px;"><canvas id="ca-weekly-chart"></canvas></div></div></div></div></div></div>`;
             
             setTimeout(() => {
                 document.getElementById('ca-modal-overlay').classList.remove('opacity-0');
@@ -419,6 +305,12 @@
             document.getElementById('ca-close-modal-btn').addEventListener('click', closeConsumptionAnalysisModal);
             document.getElementById('ca-download-report-btn').addEventListener('click', downloadConsumptionReport);
             document.getElementById('ca-modal-overlay').addEventListener('click', (e) => { if (e.target.id === 'ca-modal-overlay') closeConsumptionAnalysisModal(); });
+            
+            const btn = document.getElementById('deeper-analysis-btn');
+            if(btn) {
+                 btn.disabled = false; // Re-enable the button
+                 btn.innerHTML = `<span class="w-5 h-5 mr-2">${icons.search}</span>Deeper Analysis`;
+            }
         }
 
         function closeConsumptionAnalysisModal() {
@@ -552,6 +444,27 @@
             const workerCode = `
                 self.importScripts('https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js');
                 let fullData = [];
+                let filteredData = []; // This will always hold the currently filtered dataset
+                let headers = [];
+                let customMetricKeys = [];
+                let filterOptions = {};
+
+                // --- UTILITY FUNCTIONS (MOVED INTO WORKER) ---
+                function parseDate(dateString) {
+                    if (!dateString) return null;
+                    const cleanDateString = dateString.replace(/\[.*\]/, '');
+                    const date = new Date(cleanDateString);
+                    return isNaN(date) ? null : date;
+                }
+
+                function parseHandleTime(timeStr) {
+                    if (!timeStr || typeof timeStr !== 'string') return null;
+                    const parts = timeStr.split(':');
+                    if (parts.length !== 3) return null;
+                    const [hours, minutes, seconds] = parts.map(Number);
+                    if (isNaN(hours) || isNaN(minutes) || isNaN(seconds)) return null;
+                    return hours * 3600 + minutes * 60 + seconds;
+                }
 
                 function applyFilters(filters) {
                     if (Object.keys(filters).length === 0 || Object.values(filters).every(arr => arr.length === 0)) {
@@ -582,7 +495,7 @@
                                     self.postMessage({ type: 'parse-error', error: results.errors[0].message });
                                     return;
                                 }
-                                const originalHeaders = results.meta.fields;
+                                headers = results.meta.fields;
                                 let parsedData = results.data.map(row => {
                                     const newRow = {};
                                     for (const key in row) {
@@ -591,14 +504,13 @@
                                     return newRow;
                                 });
 
-                                const lowerCaseHeaders = originalHeaders.map(h => h.trim().toLowerCase());
+                                const lowerCaseHeaders = headers.map(h => h.trim().toLowerCase());
                                 const newCustomMetricKeys = new Set();
                                 const isOriginalFormat = lowerCaseHeaders.includes('custom metrics');
 
                                 if (isOriginalFormat) {
                                     parsedData = parsedData.map(row => {
                                         const customMetricsRaw = row['custom metrics'] || '';
-                                        const customMetrics = {};
                                         if (customMetricsRaw) {
                                             customMetricsRaw.split('||').forEach(metric => {
                                                 const [key, value] = metric.split('=');
@@ -618,23 +530,176 @@
                                         return row;
                                     });
                                 } else {
-                                    originalHeaders.forEach(header => { if (!standardHeaders.has(header.toLowerCase())) newCustomMetricKeys.add(header); });
+                                    headers.forEach(header => { if (!standardHeaders.has(header.toLowerCase())) newCustomMetricKeys.add(header); });
                                 }
                                 fullData = parsedData;
+                                customMetricKeys = Array.from(newCustomMetricKeys);
+                                
+                                // --- FIX STARTS HERE ---
+                                // Generate filter options, but only for columns with a reasonable number of unique values
+                                const allFilterableKeys = [...new Set([...headers, ...customMetricKeys])];
+                                const filterableColumns = allFilterableKeys.filter(key => !['Custom Metrics', 'Conversation Id'].map(k=>k.toLowerCase()).includes(key.toLowerCase()));
+                                filterOptions = {};
+                                const MAX_FILTER_OPTIONS = 200; // Set a reasonable limit for filter options
+                                filterableColumns.forEach(header => {
+                                    const uniqueValues = [...new Set(fullData.map(row => row[header.toLowerCase()]).filter(val => val != null && val !== ''))];
+                                    // Only add filter options for columns with a manageable number of unique values
+                                    if (uniqueValues.length > 0 && uniqueValues.length <= MAX_FILTER_OPTIONS) {
+                                        filterOptions[header] = uniqueValues.sort();
+                                    }
+                                });
+                                // --- FIX ENDS HERE ---
+
+                                // --- MODIFICATION: Calculate summary stats inside the worker ---
+                                const summaryStats = {};
+                                summaryStats.totalRows = fullData.length;
+                                const dates = fullData.map(row => parseDate(row.created)).filter(d => d);
+                                const minDate = dates.length > 0 ? new Date(Math.min.apply(null, dates)) : null;
+                                const maxDate = dates.length > 0 ? new Date(Math.max.apply(null, dates)) : null;
+                                summaryStats.timeRange = minDate && maxDate ? \`\${minDate.toLocaleDateString()} - \${maxDate.toLocaleDateString()}\` : 'N/A';
+                                summaryStats.totalContained = fullData.filter(r => r['amelia handled'] === 'true').length;
+
+                                let totalSeconds = 0, validCount = 0;
+                                fullData.forEach(row => {
+                                    const seconds = parseHandleTime(row['total handle time']);
+                                    if(seconds !== null) { totalSeconds += seconds; validCount++; }
+                                });
+                                const avgSeconds = validCount > 0 ? totalSeconds / validCount : 0;
+                                summaryStats.avgHandleTime = \`\${Math.floor(avgSeconds / 60).toString().padStart(2, '0')}:\${Math.floor(avgSeconds % 60).toString().padStart(2, '0')}\`;
+                                
+                                const events = [];
+                                fullData.forEach(row => {
+                                    const start = parseDate(row.created);
+                                    const end = parseDate(row.ended);
+                                    if(start && end) {
+                                        events.push({ time: start.getTime(), type: 'start' });
+                                        events.push({ time: end.getTime(), type: 'end' });
+                                    }
+                                });
+                                events.sort((a,b) => a.time - b.time);
+                                let maxConcurrency = 0, currentConcurrency = 0;
+                                for(const event of events) {
+                                    if(event.type === 'start') {
+                                        currentConcurrency++;
+                                        if(currentConcurrency > maxConcurrency) maxConcurrency = currentConcurrency;
+                                    } else {
+                                        currentConcurrency--;
+                                    }
+                                }
+                                summaryStats.peakConcurrency = maxConcurrency;
+
+                                // --- MODIFICATION: Do NOT send fullData back ---
                                 self.postMessage({
                                     type: 'parse-success',
-                                    data: fullData,
-                                    headers: originalHeaders, 
-                                    customMetricKeys: Array.from(newCustomMetricKeys)
+                                    headers: headers, 
+                                    customMetricKeys: customMetricKeys,
+                                    filterOptions: filterOptions,
+                                    summaryStats: summaryStats // Send calculated stats instead of the whole dataset
                                 });
                             },
                             error: (err) => {
                                 self.postMessage({ type: 'parse-error', error: (err && err.message) ? err.message : 'An unknown parsing error occurred.' });
                             }
                         });
-                    } else if (messageType === 'filter') {
-                        const filteredData = applyFilters(e.data.filters);
-                        self.postMessage({ type: 'filter-success', filteredData: filteredData });
+                    } else if (messageType === 'request-page') {
+                        filteredData = applyFilters(e.data.filters); // Update the worker's state of filtered data
+                        const { pagination, sortConfig } = e.data; 
+                        const { currentPage, rowsPerPage } = pagination;
+                        
+                        let dataForPaging = [...filteredData]; // Make a copy to sort
+
+                        if (sortConfig && sortConfig.key) {
+                            const lowerCaseKey = sortConfig.key.toLowerCase();
+                            dataForPaging.sort((a, b) => {
+                                const valA = a[lowerCaseKey]; 
+                                const valB = b[lowerCaseKey];
+                                if (valA < valB) return sortConfig.direction === 'ascending' ? -1 : 1;
+                                if (valA > valB) return sortConfig.direction === 'ascending' ? 1 : -1;
+                                return 0;
+                            });
+                        }
+
+                        const start = (currentPage - 1) * rowsPerPage;
+                        const end = start + rowsPerPage;
+                        const pageData = dataForPaging.slice(start, end);
+
+                        self.postMessage({ 
+                            type: 'page-data', 
+                            data: pageData, 
+                            totalFilteredRows: filteredData.length 
+                        });
+                    } else if (messageType === 'request-csv-string') {
+                        // MODIFICATION: Send CSV string directly for download
+                        const allHeaders = [...new Set([...headers.filter(h => h.toLowerCase() !== 'custom metrics'), ...customMetricKeys])];
+                        const exportData = filteredData.map(row => {
+                            const newRow = {};
+                            for (const header of allHeaders) { newRow[header] = row[header.toLowerCase()]; }
+                            return newRow;
+                        });
+                        const csv = Papa.unparse({ fields: allHeaders, data: exportData });
+                        self.postMessage({ type: 'csv-string-data', csvString: csv });
+                    
+                    } else if (messageType === 'request-analysis') {
+                        // --- MODIFICATION: Perform deeper analysis inside the worker ---
+                        const dailyAggregation = {}, handleTimeAggregation = {}, containmentAggregation = {};
+                        const events = [];
+
+                        filteredData.forEach(row => {
+                            const start = parseDate(row.created);
+                            const end = parseDate(row.ended);
+                            if(start && end) {
+                                events.push({ time: start.getTime(), type: 'start' });
+                                events.push({ time: end.getTime(), type: 'end' });
+                            }
+                            if (!start) return;
+
+                            const dateString = start.toISOString().slice(0, 10);
+                            const handleTime = parseHandleTime(row['total handle time']);
+                            const key = \`\${row.domain || 'Unknown'}|\${row.channel || 'Unknown'}|\${dateString}\`;
+
+                            if (!dailyAggregation[key]) dailyAggregation[key] = { domain: row.domain || 'Unknown', channel: row.channel || 'Unknown', date: dateString, count: 0 };
+                            dailyAggregation[key].count++;
+
+                            if (handleTime !== null) {
+                                if (!handleTimeAggregation[dateString]) handleTimeAggregation[dateString] = { totalSeconds: 0, count: 0 };
+                                handleTimeAggregation[dateString].totalSeconds += handleTime;
+                                handleTimeAggregation[dateString].count++;
+                            }
+                            
+                            if (!containmentAggregation[dateString]) containmentAggregation[dateString] = { contained: 0, total: 0 };
+                            containmentAggregation[dateString].total++;
+                            if (row['amelia handled'] === 'true') containmentAggregation[dateString].contained++;
+                        });
+                        
+                        events.sort((a,b) => a.time - b.time);
+                        let maxConcurrency = 0, currentConcurrency = 0;
+                        for(const event of events) {
+                            if(event.type === 'start') {
+                                currentConcurrency++;
+                                if(currentConcurrency > maxConcurrency) maxConcurrency = currentConcurrency;
+                            } else {
+                                currentConcurrency--;
+                            }
+                        }
+
+                        const handleTimeData = Object.entries(handleTimeAggregation).map(([date, data]) => ({ date, avgMinutes: (data.totalSeconds / data.count) / 60 })).sort((a,b) => new Date(a.date) - new Date(b.date));
+                        const containmentTrendData = Object.entries(containmentAggregation).map(([date, data]) => ({ date, rate: data.total > 0 ? (data.contained / data.total) * 100 : 0 })).sort((a,b) => new Date(a.date) - new Date(b.date));
+                        
+                        const totalContainedInFiltered = filteredData.filter(r => r['amelia handled'] === 'true').length;
+
+                        self.postMessage({
+                            type: 'analysis-result',
+                            data: {
+                                volumeData: Object.values(dailyAggregation),
+                                handleTimeData,
+                                containmentTrendData,
+                                summary: {
+                                    filteredPeakConcurrency: maxConcurrency,
+                                    filteredConversations: filteredData.length,
+                                    overallContainmentRate: filteredData.length > 0 ? ((totalContainedInFiltered / filteredData.length) * 100).toFixed(1) : 0
+                                }
+                            }
+                        });
                     }
                 };
             `;
@@ -644,13 +709,20 @@
 
         function setupUploaderEventListeners() {
             const dropzone = document.getElementById('dropzone');
+            if(!dropzone) return;
             const fileInput = document.createElement('input');
             fileInput.type = 'file'; fileInput.accept = '.csv';
-            dropzone.addEventListener('click', () => fileInput.click());
-            fileInput.addEventListener('change', (e) => { if (e.target.files.length > 0) handleFile(e.target.files[0]); });
-            dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('border-blue-500', 'bg-blue-50'); });
-            dropzone.addEventListener('dragleave', (e) => { e.preventDefault(); dropzone.classList.remove('border-blue-500', 'bg-blue-50'); });
-            dropzone.addEventListener('drop', (e) => { e.preventDefault(); dropzone.classList.remove('border-blue-500', 'bg-blue-50'); if (e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]); });
+            const handleClick = () => fileInput.click();
+            const handleChange = (e) => { if (e.target.files.length > 0) handleFile(e.target.files[0]); };
+            const handleDragOver = (e) => { e.preventDefault(); dropzone.classList.add('border-blue-500', 'bg-blue-50'); };
+            const handleDragLeave = (e) => { e.preventDefault(); dropzone.classList.remove('border-blue-500', 'bg-blue-50'); };
+            const handleDrop = (e) => { e.preventDefault(); dropzone.classList.remove('border-blue-500', 'bg-blue-50'); if (e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]); };
+            
+            dropzone.addEventListener('click', handleClick);
+            fileInput.addEventListener('change', handleChange);
+            dropzone.addEventListener('dragover', handleDragOver);
+            dropzone.addEventListener('dragleave', handleDragLeave);
+            dropzone.addEventListener('drop', handleDrop);
         }
 
         function setupDashboardEventListeners() {
@@ -673,24 +745,23 @@
                     toggleBtn.innerHTML = `<span class="w-6 h-6 text-gray-600 inline-block">${state.isSidebarOpen ? icons.x : icons.filter}</span>`;
                 }
                 if (resetBtn) resetApp();
-                if (prevPageBtn) {
+                if (prevPageBtn && !prevPageBtn.disabled) {
                     state.pagination.currentPage--;
-                    updateDataTable();
+                    fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
                 }
-                if (nextPageBtn) {
+                if (nextPageBtn && !nextPageBtn.disabled) {
                     state.pagination.currentPage++;
-                    updateDataTable();
+                     fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
                 }
                 if (clearFiltersBtn) {
                     document.querySelectorAll('#sidebar input[type="checkbox"]').forEach(cb => cb.checked = false);
                     state.filters = {};
                     state.pagination.currentPage = 1;
-                    fileParserWorker.postMessage({ type: 'filter', filters: state.filters });
+                    fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
                 }
                 if (downloadCsvBtn) downloadFilteredCSV();
                 if (analysisBtn && !analysisBtn.disabled) {
-                    const analysisData = transformDataForDeeperAnalysis(state.filteredData);
-                    renderConsumptionAnalysisModal(analysisData);
+                    openDeeperAnalysis();
                 }
                 if (collapsibleHeader) {
                     const container = collapsibleHeader.nextElementSibling;
@@ -704,7 +775,7 @@
                     if(state.sortConfig.key === key && state.sortConfig.direction === 'ascending') direction = 'descending';
                     state.sortConfig = { key, direction };
                     state.pagination.currentPage = 1;
-                    updateDataTable();
+                    fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
                 }
             });
 
@@ -715,12 +786,12 @@
                         const key = e.target.dataset.filterKey;
                         const checkedBoxes = document.querySelectorAll(`input[data-filter-key="${key}"]:checked`);
                         state.filters[key] = Array.from(checkedBoxes).map(cb => cb.value);
+                        if (Object.values(state.filters[key]).length === 0) delete state.filters[key];
                         state.pagination.currentPage = 1; 
-                        fileParserWorker.postMessage({ type: 'filter', filters: state.filters });
+                        fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
                     }
                 });
             }
-            setupMainChart();
         }
         
         // --- TARGETED UPDATE FUNCTIONS ---
@@ -733,6 +804,13 @@
         }
         function updateHeader() {
             document.getElementById('header-container').innerHTML = renderHeaderContent();
+            // Re-bind listener for the toggle button inside the updated header
+            document.getElementById('toggle-sidebar-btn').addEventListener('click', () => {
+                state.isSidebarOpen = !state.isSidebarOpen;
+                document.getElementById('sidebar').classList.toggle('hidden');
+                document.getElementById('sidebar').classList.toggle('flex');
+                document.getElementById('toggle-sidebar-btn').innerHTML = `<span class="w-6 h-6 text-gray-600 inline-block">${state.isSidebarOpen ? icons.x : icons.filter}</span>`;
+            });
         }
         function updateSidebarButtons() {
             const hasActiveFilters = Object.values(state.filters).some(arr => arr.length > 0);
@@ -749,68 +827,44 @@
             fileParserWorker.onmessage = (e) => {
                 const messageType = e.data.type;
                 if (messageType === 'parse-success') {
-                    state.data = e.data.data;
+                    // MODIFICATION: Receive summary stats from worker, not full data
                     state.headers = e.data.headers;
                     state.customMetricKeys = e.data.customMetricKeys;
-                    
-                    // Pre-calculate summary stats once
-                    const dates = state.data.map(row => parseDate(row.created)).filter(d => d);
-                    const minDate = dates.length > 0 ? new Date(Math.min.apply(null, dates)) : null;
-                    const maxDate = dates.length > 0 ? new Date(Math.max.apply(null, dates)) : null;
-                    state.summaryStats.timeRange = minDate && maxDate ? `${minDate.toLocaleDateString()} - ${maxDate.toLocaleDateString()}` : 'N/A';
-                    state.summaryStats.uniqueDomains = new Set(state.data.map(r => r.domain)).size;
-                    state.summaryStats.totalContained = state.data.filter(r => r['amelia handled'] === 'true').length;
-
-                    let totalSeconds = 0;
-                    let validCount = 0;
-                    state.data.forEach(row => {
-                        const seconds = parseHandleTime(row['total handle time']);
-                        if(seconds !== null) {
-                            totalSeconds += seconds;
-                            validCount++;
-                        }
-                    });
-                    const avgSeconds = validCount > 0 ? totalSeconds / validCount : 0;
-                    const minutes = Math.floor(avgSeconds / 60).toString().padStart(2, '0');
-                    const seconds = Math.floor(avgSeconds % 60).toString().padStart(2, '0');
-                    state.summaryStats.avgHandleTime = `${minutes}:${seconds}`;
-
-                    const events = [];
-                    state.data.forEach(row => {
-                        const start = parseDate(row.created);
-                        const end = parseDate(row.ended);
-                        if(start && end) {
-                            events.push({ time: start.getTime(), type: 'start' });
-                            events.push({ time: end.getTime(), type: 'end' });
-                        }
-                    });
-                    events.sort((a,b) => a.time - b.time);
-                    let maxConcurrency = 0;
-                    let currentConcurrency = 0;
-                    for(const event of events) {
-                        if(event.type === 'start') {
-                            currentConcurrency++;
-                            if(currentConcurrency > maxConcurrency) {
-                                maxConcurrency = currentConcurrency;
-                            }
-                        } else {
-                            currentConcurrency--;
-                        }
-                    }
-                    state.summaryStats.peakConcurrency = maxConcurrency;
-
-
+                    state.filterOptions = e.data.filterOptions;
+                    state.summaryStats = e.data.summaryStats; // Overwrite initial stats
                     state.filters = {};
-                    state.isLoading = false;
-                    renderApp(); 
-                    fileParserWorker.postMessage({ type: 'filter', filters: state.filters });
+                    
+                    // MODIFICATION: Immediately request the first page of data
+                    fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
+
                 } else if (messageType === 'parse-error') {
                     state.isLoading = false;
                     state.error = `Failed to parse the file: ${e.data.error}`;
                     renderApp();
-                } else if (messageType === 'filter-success') {
-                    state.filteredData = e.data.filteredData;
-                    updateUI();
+
+                } else if (messageType === 'page-data') {
+                    state.data = e.data.data;
+                    state.totalFilteredRows = e.data.totalFilteredRows;
+                    
+                    // MODIFICATION: Check if this is the initial load
+                    if(state.isLoading) {
+                        state.isLoading = false;
+                        renderApp(); // Render the full dashboard now that we have data
+                    } else {
+                        updateUI(); // Just update the UI for subsequent requests
+                    }
+                } else if (messageType === 'csv-string-data') {
+                    // MODIFICATION: Handle the CSV string from the worker for download
+                    const blob = new Blob([e.data.csvString], { type: 'text/csv;charset=utf-8;' });
+                    const link = document.createElement("a");
+                    link.href = URL.createObjectURL(blob);
+                    link.download = `filtered_${state.fileName}`;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                } else if (messageType === 'analysis-result') {
+                    // MODIFICATION: Handle the pre-aggregated analysis data from the worker
+                    renderConsumptionAnalysisModal(e.data.data);
                 }
             };
         }
