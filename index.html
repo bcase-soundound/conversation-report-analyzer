@@ -143,7 +143,7 @@
 
         function renderSidebar() {
             const options = state.filterOptions;
-            const standardKeys = Object.keys(options).filter(k => !state.customMetricKeys.includes(k));
+            const standardKeys = Object.keys(options).filter(k => !state.customMetricKeys.includes(k) && k !== 'Created' && k !== 'Finished');
             const customKeys = Object.keys(options).filter(k => state.customMetricKeys.includes(k));
             
             const renderMultiSelect = (key, values) => {
@@ -166,8 +166,24 @@
                     ${renderMultiSelect(key, values)}
                 </div>
             `;
+            
+            const renderDateRangeFilter = () => `
+                <div>
+                    <h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Date Range</h3>
+                    <div class="space-y-2 pl-2 border-l-2 border-purple-200 p-2">
+                        <div>
+                            <label for="start-date" class="block text-sm font-medium text-gray-600">Start Date</label>
+                            <input type="date" id="start-date" name="start-date" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                        </div>
+                        <div>
+                            <label for="end-date" class="block text-sm font-medium text-gray-600">End Date</label>
+                            <input type="date" id="end-date" name="end-date" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                        </div>
+                    </div>
+                </div>
+            `;
 
-            return `<aside id="sidebar" class="w-80 bg-white p-6 border-r border-gray-200 flex-col shadow-lg ${state.isSidebarOpen ? 'flex' : 'hidden'}" style="height: 100vh;"><div class="flex-grow overflow-y-auto sidebar-scroll pr-2"><h2 class="text-2xl font-bold text-gray-800 mb-6 flex items-center"><span class="mr-2 text-blue-600">${icons.filter}</span>Filters</h2><div class="space-y-6"><div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Standard Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-blue-200">${standardKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>${customKeys.length > 0 ? `<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Custom Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-green-200">${customKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>` : ''}</div></div><div class="flex-shrink-0 pt-4 border-t mt-4 space-y-2"><button id="deeper-analysis-btn" class="w-full py-2 px-4 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold transition-colors flex items-center justify-center opacity-50 cursor-not-allowed" disabled><span class="w-5 h-5 mr-2">${icons.search}</span>Deeper Analysis</button><button id="download-csv-btn" class="w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold transition-colors flex items-center justify-center"><span class="w-5 h-5 mr-2">${icons.download}</span>Download Filtered</button><button id="clear-filters-btn" class="w-full py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold transition-colors">Clear All Filters</button></div></aside>`;
+            return `<aside id="sidebar" class="w-80 bg-white p-6 border-r border-gray-200 flex-col shadow-lg ${state.isSidebarOpen ? 'flex' : 'hidden'}" style="height: 100vh;"><div class="flex-grow overflow-y-auto sidebar-scroll pr-2"><h2 class="text-2xl font-bold text-gray-800 mb-6 flex items-center"><span class="mr-2 text-blue-600">${icons.filter}</span>Filters</h2><div class="space-y-6">${renderDateRangeFilter()}<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Standard Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-blue-200">${standardKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>${customKeys.length > 0 ? `<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Custom Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-green-200">${customKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>` : ''}</div></div><div class="flex-shrink-0 pt-4 border-t mt-4 space-y-2"><button id="deeper-analysis-btn" class="w-full py-2 px-4 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold transition-colors flex items-center justify-center opacity-50 cursor-not-allowed" disabled><span class="w-5 h-5 mr-2">${icons.search}</span>Deeper Analysis</button><button id="download-csv-btn" class="w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold transition-colors flex items-center justify-center"><span class="w-5 h-5 mr-2">${icons.download}</span>Download Filtered</button><button id="clear-filters-btn" class="w-full py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold transition-colors">Clear All Filters</button></div></aside>`;
         }
         
         function renderHeader() {
@@ -175,8 +191,20 @@
         }
 
         function renderHeaderContent() {
-             const activeFilters = Object.entries(state.filters).filter(([key, value]) => value.length > 0);
-            return `<header class="flex justify-between items-center mb-6"><div class="flex items-center"><button id="toggle-sidebar-btn" class="p-2 rounded-md hover:bg-gray-200 mr-4"><span class="w-6 h-6 text-gray-600 inline-block">${state.isSidebarOpen ? icons.x : icons.filter}</span></button><div><h1 class="text-3xl font-bold text-gray-800">Conversation Analysis</h1><div class="flex items-center text-sm text-gray-500 mt-1"><span class="w-4 h-4 mr-2 inline-block">${icons.file}</span><span>${state.fileName}</span></div></div></div><button id="reset-app-btn" class="px-4 py-2 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600 transition-colors flex items-center"><span class="w-5 h-5 mr-2 inline-block">${icons.uploadCloud}</span> Upload New File</button></header>${activeFilters.length > 0 ? `<div class="mb-4"><h3 class="text-sm font-semibold text-gray-600 mb-2">Active Filters:</h3><div class="flex flex-wrap gap-2">${activeFilters.map(([key, values]) => values.map(value => `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800"><strong>${key}:</strong>&nbsp;${value}</span>`).join('')).join('')}</div></div>` : ''}`;
+            const activeFilters = Object.entries(state.filters);
+            let activeFilterHTML = '';
+
+            activeFilters.forEach(([key, value]) => {
+                if (key === 'dateRange') {
+                    if (value.start || value.end) {
+                        activeFilterHTML += `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800"><strong>Date:</strong>&nbsp;${value.start || '...'} to ${value.end || '...'}</span>`;
+                    }
+                } else if (Array.isArray(value) && value.length > 0) {
+                    activeFilterHTML += value.map(val => `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800"><strong>${key}:</strong>&nbsp;${val}</span>`).join('');
+                }
+            });
+
+            return `<header class="flex justify-between items-center mb-6"><div class="flex items-center"><button id="toggle-sidebar-btn" class="p-2 rounded-md hover:bg-gray-200 mr-4"><span class="w-6 h-6 text-gray-600 inline-block">${state.isSidebarOpen ? icons.x : icons.filter}</span></button><div><h1 class="text-3xl font-bold text-gray-800">Conversation Analysis</h1><div class="flex items-center text-sm text-gray-500 mt-1"><span class="w-4 h-4 mr-2 inline-block">${icons.file}</span><span>${state.fileName}</span></div></div></div><button id="reset-app-btn" class="px-4 py-2 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600 transition-colors flex items-center"><span class="w-5 h-5 mr-2 inline-block">${icons.uploadCloud}</span> Upload New File</button></header>${activeFilterHTML ? `<div class="mb-4"><h3 class="text-sm font-semibold text-gray-600 mb-2">Active Filters:</h3><div class="flex flex-wrap gap-2">${activeFilterHTML}</div></div>` : ''}`;
         }
 
         function renderSummaryPanel() {
@@ -452,8 +480,11 @@
                 // --- UTILITY FUNCTIONS (MOVED INTO WORKER) ---
                 function parseDate(dateString) {
                     if (!dateString) return null;
-                    const cleanDateString = dateString.replace(/\[.*\]/, '');
-                    const date = new Date(cleanDateString);
+                    // --- FIX: Robust, timezone-agnostic date parsing ---
+                    const match = dateString.match(/(\\d{4})-(\\d{2})-(\\d{2})[T ](\\d{2}):(\\d{2})/);
+                    if (!match) return null;
+                    // Creates a date using UTC values to avoid timezone shifts
+                    const date = new Date(Date.UTC(match[1], match[2] - 1, match[3], match[4], match[5]));
                     return isNaN(date) ? null : date;
                 }
 
@@ -465,19 +496,80 @@
                     if (isNaN(hours) || isNaN(minutes) || isNaN(seconds)) return null;
                     return hours * 3600 + minutes * 60 + seconds;
                 }
-
+                
                 function applyFilters(filters) {
-                    if (Object.keys(filters).length === 0 || Object.values(filters).every(arr => arr.length === 0)) {
-                        return fullData;
+                    let dataToFilter = [...fullData];
+
+                    if (filters.dateRange && (filters.dateRange.start || filters.dateRange.end)) {
+                        const startDate = filters.dateRange.start ? new Date(filters.dateRange.start + 'T00:00:00Z') : null;
+                        const endDate = filters.dateRange.end ? new Date(filters.dateRange.end + 'T23:59:59Z') : null;
+
+                        dataToFilter = dataToFilter.filter(row => {
+                            const rowDate = parseDate(row.created);
+                            if (!rowDate) return false;
+                            if (startDate && rowDate < startDate) return false;
+                            if (endDate && rowDate > endDate) return false;
+                            return true;
+                        });
                     }
-                    return fullData.filter(row => {
-                        return Object.entries(filters).every(([key, selectedValues]) => {
+
+                    const otherFilters = { ...filters };
+                    delete otherFilters.dateRange;
+
+                    if (Object.keys(otherFilters).length === 0 || Object.values(otherFilters).every(arr => arr.length === 0)) {
+                        return dataToFilter;
+                    }
+
+                    return dataToFilter.filter(row => {
+                        return Object.entries(otherFilters).every(([key, selectedValues]) => {
                             if (!selectedValues || selectedValues.length === 0) {
                                 return true;
                             }
                             return selectedValues.includes(String(row[key.toLowerCase()]));
                         });
                     });
+                }
+
+                // --- NEW: Function to calculate summary stats on filtered data ---
+                function calculateFilteredSummary(data) {
+                    const summary = {};
+                    const dates = data.map(row => parseDate(row.created)).filter(d => d);
+                    
+                    let minDate = null;
+                    let maxDate = null;
+                    if (dates.length > 0) {
+                        minDate = dates[0];
+                        maxDate = dates[0];
+                        for (let i = 1; i < dates.length; i++) {
+                            if (dates[i] < minDate) minDate = dates[i];
+                            if (dates[i] > maxDate) maxDate = dates[i];
+                        }
+                    }
+
+                    summary.timeRange = minDate && maxDate ? \`\${minDate.toLocaleDateString()} - \${maxDate.toLocaleDateString()}\` : 'N/A';
+
+                    const events = [];
+                    data.forEach(row => {
+                        const start = parseDate(row.created);
+                        // --- FIX: Use 'finished' column instead of 'ended' ---
+                        const end = parseDate(row.finished); 
+                        if (start && end) {
+                            events.push({ time: start.getTime(), type: 'start' });
+                            events.push({ time: end.getTime(), type: 'end' });
+                        }
+                    });
+                    events.sort((a, b) => a.time - b.time);
+                    let maxConcurrency = 0, currentConcurrency = 0;
+                    for (const event of events) {
+                        if (event.type === 'start') {
+                            currentConcurrency++;
+                            if (currentConcurrency > maxConcurrency) maxConcurrency = currentConcurrency;
+                        } else {
+                            currentConcurrency--;
+                        }
+                    }
+                    summary.peakConcurrency = maxConcurrency;
+                    return summary;
                 }
                 
                 self.onmessage = function(e) {
@@ -535,28 +627,19 @@
                                 fullData = parsedData;
                                 customMetricKeys = Array.from(newCustomMetricKeys);
                                 
-                                // --- FIX STARTS HERE ---
-                                // Generate filter options, but only for columns with a reasonable number of unique values
                                 const allFilterableKeys = [...new Set([...headers, ...customMetricKeys])];
                                 const filterableColumns = allFilterableKeys.filter(key => !['Custom Metrics', 'Conversation Id'].map(k=>k.toLowerCase()).includes(key.toLowerCase()));
                                 filterOptions = {};
-                                const MAX_FILTER_OPTIONS = 200; // Set a reasonable limit for filter options
+                                const MAX_FILTER_OPTIONS = 200; 
                                 filterableColumns.forEach(header => {
                                     const uniqueValues = [...new Set(fullData.map(row => row[header.toLowerCase()]).filter(val => val != null && val !== ''))];
-                                    // Only add filter options for columns with a manageable number of unique values
                                     if (uniqueValues.length > 0 && uniqueValues.length <= MAX_FILTER_OPTIONS) {
                                         filterOptions[header] = uniqueValues.sort();
                                     }
                                 });
-                                // --- FIX ENDS HERE ---
 
-                                // --- MODIFICATION: Calculate summary stats inside the worker ---
-                                const summaryStats = {};
+                                const summaryStats = calculateFilteredSummary(fullData); // Use the new function for initial stats
                                 summaryStats.totalRows = fullData.length;
-                                const dates = fullData.map(row => parseDate(row.created)).filter(d => d);
-                                const minDate = dates.length > 0 ? new Date(Math.min.apply(null, dates)) : null;
-                                const maxDate = dates.length > 0 ? new Date(Math.max.apply(null, dates)) : null;
-                                summaryStats.timeRange = minDate && maxDate ? \`\${minDate.toLocaleDateString()} - \${maxDate.toLocaleDateString()}\` : 'N/A';
                                 summaryStats.totalContained = fullData.filter(r => r['amelia handled'] === 'true').length;
 
                                 let totalSeconds = 0, validCount = 0;
@@ -567,34 +650,12 @@
                                 const avgSeconds = validCount > 0 ? totalSeconds / validCount : 0;
                                 summaryStats.avgHandleTime = \`\${Math.floor(avgSeconds / 60).toString().padStart(2, '0')}:\${Math.floor(avgSeconds % 60).toString().padStart(2, '0')}\`;
                                 
-                                const events = [];
-                                fullData.forEach(row => {
-                                    const start = parseDate(row.created);
-                                    const end = parseDate(row.ended);
-                                    if(start && end) {
-                                        events.push({ time: start.getTime(), type: 'start' });
-                                        events.push({ time: end.getTime(), type: 'end' });
-                                    }
-                                });
-                                events.sort((a,b) => a.time - b.time);
-                                let maxConcurrency = 0, currentConcurrency = 0;
-                                for(const event of events) {
-                                    if(event.type === 'start') {
-                                        currentConcurrency++;
-                                        if(currentConcurrency > maxConcurrency) maxConcurrency = currentConcurrency;
-                                    } else {
-                                        currentConcurrency--;
-                                    }
-                                }
-                                summaryStats.peakConcurrency = maxConcurrency;
-
-                                // --- MODIFICATION: Do NOT send fullData back ---
                                 self.postMessage({
                                     type: 'parse-success',
                                     headers: headers, 
                                     customMetricKeys: customMetricKeys,
                                     filterOptions: filterOptions,
-                                    summaryStats: summaryStats // Send calculated stats instead of the whole dataset
+                                    summaryStats: summaryStats
                                 });
                             },
                             error: (err) => {
@@ -602,11 +663,12 @@
                             }
                         });
                     } else if (messageType === 'request-page') {
-                        filteredData = applyFilters(e.data.filters); // Update the worker's state of filtered data
+                        filteredData = applyFilters(e.data.filters); 
+                        const filteredSummary = calculateFilteredSummary(filteredData); // Recalculate stats on every filter change
                         const { pagination, sortConfig } = e.data; 
                         const { currentPage, rowsPerPage } = pagination;
                         
-                        let dataForPaging = [...filteredData]; // Make a copy to sort
+                        let dataForPaging = [...filteredData];
 
                         if (sortConfig && sortConfig.key) {
                             const lowerCaseKey = sortConfig.key.toLowerCase();
@@ -626,10 +688,10 @@
                         self.postMessage({ 
                             type: 'page-data', 
                             data: pageData, 
-                            totalFilteredRows: filteredData.length 
+                            totalFilteredRows: filteredData.length,
+                            filteredSummary: filteredSummary // Send updated stats back
                         });
                     } else if (messageType === 'request-csv-string') {
-                        // MODIFICATION: Send CSV string directly for download
                         const allHeaders = [...new Set([...headers.filter(h => h.toLowerCase() !== 'custom metrics'), ...customMetricKeys])];
                         const exportData = filteredData.map(row => {
                             const newRow = {};
@@ -640,13 +702,12 @@
                         self.postMessage({ type: 'csv-string-data', csvString: csv });
                     
                     } else if (messageType === 'request-analysis') {
-                        // --- MODIFICATION: Perform deeper analysis inside the worker ---
                         const dailyAggregation = {}, handleTimeAggregation = {}, containmentAggregation = {};
                         const events = [];
 
                         filteredData.forEach(row => {
                             const start = parseDate(row.created);
-                            const end = parseDate(row.ended);
+                            const end = parseDate(row.finished); // --- FIX: Use 'finished' column ---
                             if(start && end) {
                                 events.push({ time: start.getTime(), type: 'start' });
                                 events.push({ time: end.getTime(), type: 'end' });
@@ -755,6 +816,8 @@
                 }
                 if (clearFiltersBtn) {
                     document.querySelectorAll('#sidebar input[type="checkbox"]').forEach(cb => cb.checked = false);
+                    document.getElementById('start-date').value = '';
+                    document.getElementById('end-date').value = '';
                     state.filters = {};
                     state.pagination.currentPage = 1;
                     fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
@@ -790,6 +853,16 @@
                         state.pagination.currentPage = 1; 
                         fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
                     }
+                    if (e.target.matches('#start-date, #end-date')) {
+                        const startDate = document.getElementById('start-date').value;
+                        const endDate = document.getElementById('end-date').value;
+                        state.filters.dateRange = { start: startDate, end: endDate };
+                        if (!startDate && !endDate) {
+                            delete state.filters.dateRange;
+                        }
+                        state.pagination.currentPage = 1;
+                        fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
+                    }
                 });
             }
         }
@@ -813,7 +886,11 @@
             });
         }
         function updateSidebarButtons() {
-            const hasActiveFilters = Object.values(state.filters).some(arr => arr.length > 0);
+            const hasActiveFilters = Object.keys(state.filters).length > 0 && Object.values(state.filters).some(value => {
+                if (Array.isArray(value)) return value.length > 0;
+                if (typeof value === 'object' && value !== null) return value.start || value.end;
+                return false;
+            });
             const btn = document.getElementById('deeper-analysis-btn');
             if (btn) {
                 btn.disabled = !hasActiveFilters;
@@ -827,14 +904,12 @@
             fileParserWorker.onmessage = (e) => {
                 const messageType = e.data.type;
                 if (messageType === 'parse-success') {
-                    // MODIFICATION: Receive summary stats from worker, not full data
                     state.headers = e.data.headers;
                     state.customMetricKeys = e.data.customMetricKeys;
                     state.filterOptions = e.data.filterOptions;
-                    state.summaryStats = e.data.summaryStats; // Overwrite initial stats
+                    state.summaryStats = e.data.summaryStats;
                     state.filters = {};
                     
-                    // MODIFICATION: Immediately request the first page of data
                     fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
 
                 } else if (messageType === 'parse-error') {
@@ -846,15 +921,23 @@
                     state.data = e.data.data;
                     state.totalFilteredRows = e.data.totalFilteredRows;
                     
-                    // MODIFICATION: Check if this is the initial load
+                    // --- FIX: Update summary stats with filtered data ---
+                    if (e.data.filteredSummary) {
+                        // Preserve stats that don't change
+                        const totalRows = state.summaryStats.totalRows;
+                        const totalContained = state.summaryStats.totalContained;
+                        const avgHandleTime = state.summaryStats.avgHandleTime;
+                        
+                        state.summaryStats = { ...e.data.filteredSummary, totalRows, totalContained, avgHandleTime };
+                    }
+                    
                     if(state.isLoading) {
                         state.isLoading = false;
-                        renderApp(); // Render the full dashboard now that we have data
+                        renderApp();
                     } else {
-                        updateUI(); // Just update the UI for subsequent requests
+                        updateUI();
                     }
                 } else if (messageType === 'csv-string-data') {
-                    // MODIFICATION: Handle the CSV string from the worker for download
                     const blob = new Blob([e.data.csvString], { type: 'text/csv;charset=utf-8;' });
                     const link = document.createElement("a");
                     link.href = URL.createObjectURL(blob);
@@ -863,7 +946,6 @@
                     link.click();
                     document.body.removeChild(link);
                 } else if (messageType === 'analysis-result') {
-                    // MODIFICATION: Handle the pre-aggregated analysis data from the worker
                     renderConsumptionAnalysisModal(e.data.data);
                 }
             };
