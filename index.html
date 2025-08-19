@@ -143,8 +143,9 @@
 
         function renderSidebar() {
             const options = state.filterOptions;
-            const standardKeys = Object.keys(options).filter(k => !state.customMetricKeys.includes(k) && k !== 'Created' && k !== 'Finished');
-            const customKeys = Object.keys(options).filter(k => state.customMetricKeys.includes(k));
+            // --- FIX: Sort both standard and custom keys alphabetically ---
+            const standardKeys = Object.keys(options).filter(k => !state.customMetricKeys.includes(k) && k !== 'Created' && k !== 'Finished').sort();
+            const customKeys = Object.keys(options).filter(k => state.customMetricKeys.includes(k)).sort();
             
             const renderMultiSelect = (key, values) => {
                 const selectedValues = state.filters[key] || [];
@@ -158,7 +159,7 @@
             };
 
             const renderFilterGroup = (key, values) => `
-                <div>
+                <div class="metric-filter-group">
                     <div data-collapsible-key="${key}" class="flex justify-between items-center cursor-pointer p-1 rounded hover:bg-gray-100">
                         <label class="block text-sm font-medium text-gray-600 pointer-events-none">${key}</label>
                         <span class="collapse-icon text-gray-500">${icons.chevronRight}</span>
@@ -183,7 +184,8 @@
                 </div>
             `;
 
-            return `<aside id="sidebar" class="w-80 bg-white p-6 border-r border-gray-200 flex-col shadow-lg ${state.isSidebarOpen ? 'flex' : 'hidden'}" style="height: 100vh;"><div class="flex-grow overflow-y-auto sidebar-scroll pr-2"><h2 class="text-2xl font-bold text-gray-800 mb-6 flex items-center"><span class="mr-2 text-blue-600">${icons.filter}</span>Filters</h2><div class="space-y-6">${renderDateRangeFilter()}<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Standard Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-blue-200">${standardKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>${customKeys.length > 0 ? `<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Custom Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-green-200">${customKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>` : ''}</div></div><div class="flex-shrink-0 pt-4 border-t mt-4 space-y-2"><button id="deeper-analysis-btn" class="w-full py-2 px-4 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold transition-colors flex items-center justify-center opacity-50 cursor-not-allowed" disabled><span class="w-5 h-5 mr-2">${icons.search}</span>Deeper Analysis</button><button id="download-csv-btn" class="w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold transition-colors flex items-center justify-center"><span class="w-5 h-5 mr-2">${icons.download}</span>Download Filtered</button><button id="clear-filters-btn" class="w-full py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold transition-colors">Clear All Filters</button></div></aside>`;
+            // --- NEW: Add search input to the sidebar ---
+            return `<aside id="sidebar" class="w-80 bg-white p-6 border-r border-gray-200 flex-col shadow-lg ${state.isSidebarOpen ? 'flex' : 'hidden'}" style="height: 100vh;"><div class="flex-grow overflow-y-auto sidebar-scroll pr-2"><h2 class="text-2xl font-bold text-gray-800 mb-2 flex items-center"><span class="mr-2 text-blue-600">${icons.filter}</span>Filters</h2><div class="relative mb-4"><input type="search" id="metric-search-input" placeholder="Search metrics..." class="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"><div class="absolute inset-y-0 left-0 pl-2 flex items-center pointer-events-none">${icons.search.replace('width="24"','width="20"').replace('height="24"','height="20"').replace('stroke="currentColor"','stroke="gray"')}</div></div><div class="space-y-6">${renderDateRangeFilter()}<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Standard Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-blue-200">${standardKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>${customKeys.length > 0 ? `<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Custom Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-green-200">${customKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>` : ''}</div></div><div class="flex-shrink-0 pt-4 border-t mt-4 space-y-2"><button id="deeper-analysis-btn" class="w-full py-2 px-4 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold transition-colors flex items-center justify-center opacity-50 cursor-not-allowed" disabled><span class="w-5 h-5 mr-2">${icons.search}</span>Deeper Analysis</button><button id="download-csv-btn" class="w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold transition-colors flex items-center justify-center"><span class="w-5 h-5 mr-2">${icons.download}</span>Download Filtered</button><button id="clear-filters-btn" class="w-full py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold transition-colors">Clear All Filters</button></div></aside>`;
         }
         
         function renderHeader() {
@@ -844,6 +846,20 @@
 
             const sidebar = document.getElementById('sidebar');
             if(sidebar) {
+                 sidebar.addEventListener('input', (e) => {
+                    if (e.target.matches('#metric-search-input')) {
+                        const searchTerm = e.target.value.toLowerCase();
+                        const filterGroups = document.querySelectorAll('.metric-filter-group');
+                        filterGroups.forEach(group => {
+                            const label = group.querySelector('label').textContent;
+                            if (label.toLowerCase().includes(searchTerm)) {
+                                group.style.display = '';
+                            } else {
+                                group.style.display = 'none';
+                            }
+                        });
+                    }
+                 });
                  sidebar.addEventListener('change', (e) => {
                     if (e.target.matches('input[type="checkbox"]')) {
                         const key = e.target.dataset.filterKey;
