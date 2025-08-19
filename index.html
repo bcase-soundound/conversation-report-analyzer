@@ -70,6 +70,7 @@
             headers: [],
             customMetricKeys: [],
             filterOptions: {},
+            highCardinalityFields: [], // --- NEW: For text search filters ---
             summaryStats: { timeRange: 'N/A', totalRows: 0, peakConcurrency: 0, totalContained: 0, avgHandleTime: '00:00' }, // Pre-calculated stats
             filters: {},
             fileName: '',
@@ -126,7 +127,6 @@
             updateSummaryPanel();
             updateMainChart();
             updateDataTable();
-            updateSidebarButtons();
             updateHeader();
         }
 
@@ -143,7 +143,6 @@
 
         function renderSidebar() {
             const options = state.filterOptions;
-            // --- FIX: Sort both standard and custom keys alphabetically ---
             const standardKeys = Object.keys(options).filter(k => !state.customMetricKeys.includes(k) && k !== 'Created' && k !== 'Finished').sort();
             const customKeys = Object.keys(options).filter(k => state.customMetricKeys.includes(k)).sort();
             
@@ -184,8 +183,14 @@
                 </div>
             `;
 
-            // --- NEW: Add search input to the sidebar ---
-            return `<aside id="sidebar" class="w-80 bg-white p-6 border-r border-gray-200 flex-col shadow-lg ${state.isSidebarOpen ? 'flex' : 'hidden'}" style="height: 100vh;"><div class="flex-grow overflow-y-auto sidebar-scroll pr-2"><h2 class="text-2xl font-bold text-gray-800 mb-2 flex items-center"><span class="mr-2 text-blue-600">${icons.filter}</span>Filters</h2><div class="relative mb-4"><input type="search" id="metric-search-input" placeholder="Search metrics..." class="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"><div class="absolute inset-y-0 left-0 pl-2 flex items-center pointer-events-none">${icons.search.replace('width="24"','width="20"').replace('height="24"','height="20"').replace('stroke="currentColor"','stroke="gray"')}</div></div><div class="space-y-6">${renderDateRangeFilter()}<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Standard Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-blue-200">${standardKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>${customKeys.length > 0 ? `<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Custom Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-green-200">${customKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>` : ''}</div></div><div class="flex-shrink-0 pt-4 border-t mt-4 space-y-2"><button id="deeper-analysis-btn" class="w-full py-2 px-4 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold transition-colors flex items-center justify-center opacity-50 cursor-not-allowed" disabled><span class="w-5 h-5 mr-2">${icons.search}</span>Deeper Analysis</button><button id="download-csv-btn" class="w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold transition-colors flex items-center justify-center"><span class="w-5 h-5 mr-2">${icons.download}</span>Download Filtered</button><button id="clear-filters-btn" class="w-full py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold transition-colors">Clear All Filters</button></div></aside>`;
+            const renderTextSearchFilter = (key) => `
+                <div class="metric-filter-group">
+                    <label for="text-filter-${key}" class="block text-sm font-medium text-gray-600">${key}</label>
+                    <input type="text" id="text-filter-${key}" data-filter-key="${key}" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="Contains...">
+                </div>
+            `;
+
+            return `<aside id="sidebar" class="w-80 bg-white p-6 border-r border-gray-200 flex-col shadow-lg ${state.isSidebarOpen ? 'flex' : 'hidden'}" style="height: 100vh;"><div class="flex-grow overflow-y-auto sidebar-scroll pr-2"><h2 class="text-2xl font-bold text-gray-800 mb-2 flex items-center"><span class="mr-2 text-blue-600">${icons.filter}</span>Filters</h2><div class="relative mb-4"><input type="search" id="metric-search-input" placeholder="Search metrics..." class="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"><div class="absolute inset-y-0 left-0 pl-2 flex items-center pointer-events-none">${icons.search.replace('width="24"','width="20"').replace('height="24"','height="20"').replace('stroke="currentColor"','stroke="gray"')}</div></div><div class="space-y-6">${renderDateRangeFilter()}<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Standard Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-blue-200">${standardKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>${customKeys.length > 0 ? `<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Custom Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-green-200">${customKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>` : ''}${state.highCardinalityFields.length > 0 ? `<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Text Search Filters</h3><p class="text-xs text-gray-500 pl-2 mb-2">For metrics with 200+ unique values.</p><div class="space-y-4 pl-2 border-l-2 border-yellow-200 p-2">${state.highCardinalityFields.map(key => renderTextSearchFilter(key)).join('')}</div></div>` : ''}</div></div><div class="flex-shrink-0 pt-4 border-t mt-4 space-y-2"><button id="deeper-analysis-btn" class="w-full py-2 px-4 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold transition-colors flex items-center justify-center"><span class="w-5 h-5 mr-2">${icons.search}</span>Deeper Analysis</button><button id="download-csv-btn" class="w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold transition-colors flex items-center justify-center"><span class="w-5 h-5 mr-2">${icons.download}</span>Download Filtered</button><button id="clear-filters-btn" class="w-full py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold transition-colors">Clear All Filters</button></div></aside>`;
         }
         
         function renderHeader() {
@@ -203,6 +208,8 @@
                     }
                 } else if (Array.isArray(value) && value.length > 0) {
                     activeFilterHTML += value.map(val => `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800"><strong>${key}:</strong>&nbsp;${val}</span>`).join('');
+                } else if (typeof value === 'string' && value.length > 0) {
+                    activeFilterHTML += `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800"><strong>${key} contains:</strong>&nbsp;${value}</span>`;
                 }
             });
 
@@ -273,7 +280,7 @@
         function resetApp() {
             if (state.mainChartInstance) { state.mainChartInstance.destroy(); state.mainChartInstance = null; }
             closeConsumptionAnalysisModal();
-            Object.assign(state, { data: [], totalFilteredRows: 0, headers: [], customMetricKeys: [], filterOptions: {}, filters: {}, fileName: '', error: '', isLoading: false, pagination: { currentPage: 1, rowsPerPage: 100 }, summaryStats: { totalRows: 0 } });
+            Object.assign(state, { data: [], totalFilteredRows: 0, headers: [], customMetricKeys: [], filterOptions: {}, highCardinalityFields: [], filters: {}, fileName: '', error: '', isLoading: false, pagination: { currentPage: 1, rowsPerPage: 100 }, summaryStats: { totalRows: 0 } });
             if (fileParserWorker) fileParserWorker.terminate();
             setupAndAttachWorker();
             renderApp();
@@ -308,14 +315,18 @@
         }
         
         // --- DEEPER ANALYSIS MODAL ---
-        // MODIFICATION: This function now just sends a message to the worker
         function openDeeperAnalysis() {
             const btn = document.getElementById('deeper-analysis-btn');
             if(btn) {
                 btn.disabled = true;
                 btn.innerHTML = `<div class="loader !w-5 !h-5 !border-2 !border-t-blue-400 mr-2"></div>Analyzing...`;
             }
-            fileParserWorker.postMessage({ type: 'request-analysis' });
+            const hasActiveFilters = Object.keys(state.filters).length > 0 && Object.values(state.filters).some(value => {
+                if (Array.isArray(value)) return value.length > 0;
+                if (typeof value === 'object' && value !== null) return value.start || value.end;
+                return false;
+            });
+            fileParserWorker.postMessage({ type: 'request-analysis', useFilteredData: hasActiveFilters });
         }
 
         // This function now receives the pre-aggregated data from the worker
@@ -478,6 +489,7 @@
                 let headers = [];
                 let customMetricKeys = [];
                 let filterOptions = {};
+                let highCardinalityFields = [];
 
                 // --- UTILITY FUNCTIONS (MOVED INTO WORKER) ---
                 function parseDate(dateString) {
@@ -518,16 +530,17 @@
                     const otherFilters = { ...filters };
                     delete otherFilters.dateRange;
 
-                    if (Object.keys(otherFilters).length === 0 || Object.values(otherFilters).every(arr => arr.length === 0)) {
-                        return dataToFilter;
-                    }
-
                     return dataToFilter.filter(row => {
-                        return Object.entries(otherFilters).every(([key, selectedValues]) => {
-                            if (!selectedValues || selectedValues.length === 0) {
-                                return true;
+                        return Object.entries(otherFilters).every(([key, value]) => {
+                            if (!value) return true;
+                            const rowValue = String(row[key.toLowerCase()] ?? '').toLowerCase();
+                            if (Array.isArray(value)) {
+                                if (value.length === 0) return true;
+                                return value.includes(String(row[key.toLowerCase()]));
+                            } else if (typeof value === 'string') {
+                                return rowValue.includes(value.toLowerCase());
                             }
-                            return selectedValues.includes(String(row[key.toLowerCase()]));
+                            return true;
                         });
                     });
                 }
@@ -553,7 +566,6 @@
                     const events = [];
                     data.forEach(row => {
                         const start = parseDate(row.created);
-                        // --- FIX: Use 'finished' column instead of 'ended' ---
                         const end = parseDate(row.finished); 
                         if (start && end) {
                             events.push({ time: start.getTime(), type: 'start' });
@@ -632,11 +644,14 @@
                                 const allFilterableKeys = [...new Set([...headers, ...customMetricKeys])];
                                 const filterableColumns = allFilterableKeys.filter(key => !['Custom Metrics', 'Conversation Id'].map(k=>k.toLowerCase()).includes(key.toLowerCase()));
                                 filterOptions = {};
+                                highCardinalityFields = [];
                                 const MAX_FILTER_OPTIONS = 200; 
                                 filterableColumns.forEach(header => {
                                     const uniqueValues = [...new Set(fullData.map(row => row[header.toLowerCase()]).filter(val => val != null && val !== ''))];
                                     if (uniqueValues.length > 0 && uniqueValues.length <= MAX_FILTER_OPTIONS) {
                                         filterOptions[header] = uniqueValues.sort();
+                                    } else if (uniqueValues.length > MAX_FILTER_OPTIONS) {
+                                        highCardinalityFields.push(header);
                                     }
                                 });
 
@@ -657,6 +672,7 @@
                                     headers: headers, 
                                     customMetricKeys: customMetricKeys,
                                     filterOptions: filterOptions,
+                                    highCardinalityFields: highCardinalityFields,
                                     summaryStats: summaryStats
                                 });
                             },
@@ -704,10 +720,11 @@
                         self.postMessage({ type: 'csv-string-data', csvString: csv });
                     
                     } else if (messageType === 'request-analysis') {
+                        const dataToAnalyze = e.data.useFilteredData ? filteredData : fullData;
                         const dailyAggregation = {}, handleTimeAggregation = {}, containmentAggregation = {};
                         const events = [];
 
-                        filteredData.forEach(row => {
+                        dataToAnalyze.forEach(row => {
                             const start = parseDate(row.created);
                             const end = parseDate(row.finished); // --- FIX: Use 'finished' column ---
                             if(start && end) {
@@ -748,7 +765,7 @@
                         const handleTimeData = Object.entries(handleTimeAggregation).map(([date, data]) => ({ date, avgMinutes: (data.totalSeconds / data.count) / 60 })).sort((a,b) => new Date(a.date) - new Date(b.date));
                         const containmentTrendData = Object.entries(containmentAggregation).map(([date, data]) => ({ date, rate: data.total > 0 ? (data.contained / data.total) * 100 : 0 })).sort((a,b) => new Date(a.date) - new Date(b.date));
                         
-                        const totalContainedInFiltered = filteredData.filter(r => r['amelia handled'] === 'true').length;
+                        const totalContainedInFiltered = dataToAnalyze.filter(r => r['amelia handled'] === 'true').length;
 
                         self.postMessage({
                             type: 'analysis-result',
@@ -758,8 +775,8 @@
                                 containmentTrendData,
                                 summary: {
                                     filteredPeakConcurrency: maxConcurrency,
-                                    filteredConversations: filteredData.length,
-                                    overallContainmentRate: filteredData.length > 0 ? ((totalContainedInFiltered / filteredData.length) * 100).toFixed(1) : 0
+                                    filteredConversations: dataToAnalyze.length,
+                                    overallContainmentRate: dataToAnalyze.length > 0 ? ((totalContainedInFiltered / dataToAnalyze.length) * 100).toFixed(1) : 0
                                 }
                             }
                         });
@@ -818,6 +835,7 @@
                 }
                 if (clearFiltersBtn) {
                     document.querySelectorAll('#sidebar input[type="checkbox"]').forEach(cb => cb.checked = false);
+                    document.querySelectorAll('#sidebar input[type="text"]').forEach(input => input.value = '');
                     document.getElementById('start-date').value = '';
                     document.getElementById('end-date').value = '';
                     state.filters = {};
@@ -858,6 +876,17 @@
                                 group.style.display = 'none';
                             }
                         });
+                    }
+                    if (e.target.matches('input[type="text"][data-filter-key]')) {
+                        const key = e.target.dataset.filterKey;
+                        const value = e.target.value;
+                        if(value) {
+                            state.filters[key] = value;
+                        } else {
+                            delete state.filters[key];
+                        }
+                        state.pagination.currentPage = 1;
+                        fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
                     }
                  });
                  sidebar.addEventListener('change', (e) => {
@@ -902,17 +931,7 @@
             });
         }
         function updateSidebarButtons() {
-            const hasActiveFilters = Object.keys(state.filters).length > 0 && Object.values(state.filters).some(value => {
-                if (Array.isArray(value)) return value.length > 0;
-                if (typeof value === 'object' && value !== null) return value.start || value.end;
-                return false;
-            });
-            const btn = document.getElementById('deeper-analysis-btn');
-            if (btn) {
-                btn.disabled = !hasActiveFilters;
-                btn.classList.toggle('opacity-50', !hasActiveFilters);
-                btn.classList.toggle('cursor-not-allowed', !hasActiveFilters);
-            }
+            // This function is no longer needed for the Deeper Analysis button
         }
         
         function setupAndAttachWorker() {
@@ -923,6 +942,7 @@
                     state.headers = e.data.headers;
                     state.customMetricKeys = e.data.customMetricKeys;
                     state.filterOptions = e.data.filterOptions;
+                    state.highCardinalityFields = e.data.highCardinalityFields;
                     state.summaryStats = e.data.summaryStats;
                     state.filters = {};
                     
@@ -937,9 +957,7 @@
                     state.data = e.data.data;
                     state.totalFilteredRows = e.data.totalFilteredRows;
                     
-                    // --- FIX: Update summary stats with filtered data ---
                     if (e.data.filteredSummary) {
-                        // Preserve stats that don't change
                         const totalRows = state.summaryStats.totalRows;
                         const totalContained = state.summaryStats.totalContained;
                         const avgHandleTime = state.summaryStats.avgHandleTime;
