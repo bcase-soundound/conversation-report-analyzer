@@ -70,9 +70,10 @@
             headers: [],
             customMetricKeys: [],
             filterOptions: {},
-            highCardinalityFields: [], // --- NEW: For text search filters ---
-            summaryStats: { timeRange: 'N/A', totalRows: 0, peakConcurrency: 0, totalContained: 0, avgHandleTime: '00:00' }, // Pre-calculated stats
+            highCardinalityFields: [], 
+            summaryStats: { timeRange: 'N/A', totalRows: 0, peakConcurrency: 0, avgConcurrency: 0, totalContained: 0, avgHandleTime: '00:00' }, // Pre-calculated stats
             filters: {},
+            filterPresets: JSON.parse(localStorage.getItem('conversationAnalyzerPresets')) || {}, 
             fileName: '',
             error: '',
             isLoading: false,
@@ -85,6 +86,7 @@
                 weeklyChart: null,
                 containmentChart: null,
                 handleTimeChart: null,
+                concurrencyChart: null, // --- NEW: For concurrency trend chart ---
             },
         };
 
@@ -118,11 +120,10 @@
                 appRoot.innerHTML = renderDashboard();
                 setupMainChart();
                 updateUI();
-                setupDashboardEventListeners(); // Re-attach listeners after full dashboard render
+                setupDashboardEventListeners(); 
             }
         }
         
-        // OPTIMIZED: This function now only updates the necessary parts of the UI
         function updateUI() {
             updateSummaryPanel();
             updateMainChart();
@@ -167,30 +168,54 @@
                 </div>
             `;
             
-            const renderDateRangeFilter = () => `
+            const renderDateRangeFilter = () => {
+                const startDate = state.filters.dateRange?.start || '';
+                const endDate = state.filters.dateRange?.end || '';
+                return `
                 <div>
                     <h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Date Range</h3>
                     <div class="space-y-2 pl-2 border-l-2 border-purple-200 p-2">
                         <div>
                             <label for="start-date" class="block text-sm font-medium text-gray-600">Start Date</label>
-                            <input type="date" id="start-date" name="start-date" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                            <input type="date" id="start-date" name="start-date" value="${startDate}" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
                         </div>
                         <div>
                             <label for="end-date" class="block text-sm font-medium text-gray-600">End Date</label>
-                            <input type="date" id="end-date" name="end-date" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                            <input type="date" id="end-date" name="end-date" value="${endDate}" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
                         </div>
                     </div>
                 </div>
-            `;
+            `};
 
-            const renderTextSearchFilter = (key) => `
+            const renderTextSearchFilter = (key) => {
+                const value = state.filters[key] || '';
+                return `
                 <div class="metric-filter-group">
                     <label for="text-filter-${key}" class="block text-sm font-medium text-gray-600">${key}</label>
-                    <input type="text" id="text-filter-${key}" data-filter-key="${key}" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="Contains...">
+                    <input type="text" id="text-filter-${key}" data-filter-key="${key}" value="${value}" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="Contains...">
                 </div>
-            `;
+            `};
+            
+            const renderPresetManager = () => {
+                const presets = Object.keys(state.filterPresets).sort();
+                return `
+                    <div>
+                        <h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Filter Presets</h3>
+                        <div class="space-y-2 pl-2 border-l-2 border-gray-200 p-2">
+                            <select id="preset-select" class="w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                                <option value="">Select a preset...</option>
+                                ${presets.map(p => `<option value="${p}">${p}</option>`).join('')}
+                            </select>
+                            <div class="flex gap-2 mt-2">
+                                <button id="save-preset-btn" class="flex-1 py-2 px-4 text-sm bg-blue-500 text-white rounded-md hover:bg-blue-600">Save Current</button>
+                                <button id="manage-presets-btn" class="flex-1 py-2 px-4 text-sm bg-gray-500 text-white rounded-md hover:bg-gray-600">Manage</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            };
 
-            return `<aside id="sidebar" class="w-80 bg-white p-6 border-r border-gray-200 flex-col shadow-lg ${state.isSidebarOpen ? 'flex' : 'hidden'}" style="height: 100vh;"><div class="flex-grow overflow-y-auto sidebar-scroll pr-2"><h2 class="text-2xl font-bold text-gray-800 mb-2 flex items-center"><span class="mr-2 text-blue-600">${icons.filter}</span>Filters</h2><div class="relative mb-4"><input type="search" id="metric-search-input" placeholder="Search metrics..." class="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"><div class="absolute inset-y-0 left-0 pl-2 flex items-center pointer-events-none">${icons.search.replace('width="24"','width="20"').replace('height="24"','height="20"').replace('stroke="currentColor"','stroke="gray"')}</div></div><div class="space-y-6">${renderDateRangeFilter()}<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Standard Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-blue-200">${standardKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>${customKeys.length > 0 ? `<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Custom Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-green-200">${customKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>` : ''}${state.highCardinalityFields.length > 0 ? `<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Text Search Filters</h3><p class="text-xs text-gray-500 pl-2 mb-2">For metrics with 200+ unique values.</p><div class="space-y-4 pl-2 border-l-2 border-yellow-200 p-2">${state.highCardinalityFields.map(key => renderTextSearchFilter(key)).join('')}</div></div>` : ''}</div></div><div class="flex-shrink-0 pt-4 border-t mt-4 space-y-2"><button id="deeper-analysis-btn" class="w-full py-2 px-4 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold transition-colors flex items-center justify-center"><span class="w-5 h-5 mr-2">${icons.search}</span>Deeper Analysis</button><button id="download-csv-btn" class="w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold transition-colors flex items-center justify-center"><span class="w-5 h-5 mr-2">${icons.download}</span>Download Filtered</button><button id="clear-filters-btn" class="w-full py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold transition-colors">Clear All Filters</button></div></aside>`;
+            return `<aside id="sidebar" class="w-80 bg-white p-6 border-r border-gray-200 flex-col shadow-lg ${state.isSidebarOpen ? 'flex' : 'hidden'}" style="height: 100vh;"><div class="flex-grow overflow-y-auto sidebar-scroll pr-2"><h2 class="text-2xl font-bold text-gray-800 mb-2 flex items-center"><span class="mr-2 text-blue-600">${icons.filter}</span>Filters</h2><div class="relative mb-4"><input type="search" id="metric-search-input" placeholder="Search metrics..." class="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"><div class="absolute inset-y-0 left-0 pl-2 flex items-center pointer-events-none">${icons.search.replace('width="24"','width="20"').replace('height="24"','height="20"').replace('stroke="currentColor"','stroke="gray"')}</div></div><div class="space-y-6">${renderPresetManager()}${renderDateRangeFilter()}<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Standard Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-blue-200">${standardKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>${customKeys.length > 0 ? `<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Custom Metrics</h3><div class="space-y-2 pl-2 border-l-2 border-green-200">${customKeys.map(key => renderFilterGroup(key, options[key])).join('')}</div></div>` : ''}${state.highCardinalityFields.length > 0 ? `<div><h3 class="w-full flex justify-between items-center text-lg font-semibold text-gray-700 mb-2">Text Search Filters</h3><p class="text-xs text-gray-500 pl-2 mb-2">For metrics with 200+ unique values.</p><div class="space-y-4 pl-2 border-l-2 border-yellow-200 p-2">${state.highCardinalityFields.map(key => renderTextSearchFilter(key)).join('')}</div></div>` : ''}</div></div><div class="flex-shrink-0 pt-4 border-t mt-4 space-y-2"><button id="deeper-analysis-btn" class="w-full py-2 px-4 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold transition-colors flex items-center justify-center"><span class="w-5 h-5 mr-2">${icons.search}</span>Deeper Analysis</button><button id="download-csv-btn" class="w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold transition-colors flex items-center justify-center"><span class="w-5 h-5 mr-2">${icons.download}</span>Download Filtered</button><button id="clear-filters-btn" class="w-full py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold transition-colors">Clear All Filters</button></div></aside>`;
         }
         
         function renderHeader() {
@@ -217,19 +242,20 @@
         }
 
         function renderSummaryPanel() {
-            return `<div id="summary-panel" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">${renderSummaryContent()}</div>`;
+            return `<div id="summary-panel" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">${renderSummaryContent()}</div>`;
         }
         
         function renderSummaryContent() {
-            const { timeRange, peakConcurrency, totalContained, avgHandleTime, totalRows } = state.summaryStats;
+            const { timeRange, peakConcurrency, avgConcurrency, totalContained, avgHandleTime, totalRows } = state.summaryStats;
             const summaryCard = (title, value) => `<div class="bg-white p-5 rounded-xl shadow-sm border border-gray-200"><h3 class="text-sm font-medium text-gray-500">${title}</h3><p class="text-2xl font-bold text-gray-800 mt-1">${value}</p></div>`;
             return `
                 ${summaryCard('Time Range', timeRange)}
                 ${summaryCard('Total Conversations', totalRows.toLocaleString())}
                 ${summaryCard('Filtered Conversations', state.totalFilteredRows.toLocaleString())}
-                ${summaryCard('Peak Concurrency', peakConcurrency.toLocaleString())}
-                ${summaryCard('Total Contained', totalContained.toLocaleString())}
                 ${summaryCard('Avg. Handle Time', avgHandleTime)}
+                ${summaryCard('Peak Concurrency', peakConcurrency.toLocaleString())}
+                ${summaryCard('Avg. Concurrency', avgConcurrency.toFixed(2))}
+                ${summaryCard('Total Contained', totalContained.toLocaleString())}
             `;
         }
         
@@ -264,6 +290,103 @@
             </div>`;
         }
         
+        // --- PRESET & MODAL FUNCTIONS ---
+        function savePresetsToLocalStorage() {
+            localStorage.setItem('conversationAnalyzerPresets', JSON.stringify(state.filterPresets));
+        }
+
+        function applyPreset(presetName) {
+            const presetFilters = state.filterPresets[presetName];
+            if (!presetFilters) return;
+
+            // 1. Update state.filters from the preset
+            state.filters = JSON.parse(JSON.stringify(presetFilters)); // Deep copy
+
+            // 2. Re-render the sidebar. This will automatically reflect the new state.filters
+            const sidebar = document.getElementById('sidebar');
+            if (sidebar) {
+                sidebar.outerHTML = renderSidebar();
+                // --- FIX: Re-attach listeners to the new sidebar element ---
+                setupSidebarEventListeners();
+            }
+
+            // 3. Expand the relevant sections AFTER re-rendering to show the active filters
+            const activeFilterKeys = Object.keys(state.filters).filter(key => {
+                const value = state.filters[key];
+                if (key === 'dateRange') return value.start || value.end;
+                if (Array.isArray(value)) return value.length > 0;
+                return !!value;
+            });
+
+            activeFilterKeys.forEach(key => {
+                const header = document.querySelector(`[data-collapsible-key="${key}"]`);
+                if (header) {
+                    const container = header.nextElementSibling;
+                    if (container && container.classList.contains('hidden')) {
+                        container.classList.remove('hidden');
+                        const icon = header.querySelector('.collapse-icon');
+                        if (icon) icon.innerHTML = icons.chevronDown;
+                    }
+                }
+            });
+
+            // 4. Trigger the data update
+            state.pagination.currentPage = 1;
+            fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
+        }
+        
+        function renderSavePresetModal() {
+            modalRoot.innerHTML = `
+                <div id="save-preset-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div class="bg-white rounded-lg shadow-xl w-full max-w-sm">
+                        <div class="p-4 border-b">
+                            <h2 class="text-xl font-bold text-gray-800">Save Filter Preset</h2>
+                        </div>
+                        <div class="p-4 space-y-4">
+                            <label for="preset-name-input" class="block text-sm font-medium text-gray-700">Preset Name</label>
+                            <input type="text" id="preset-name-input" class="w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" placeholder="e.g., 'Weekly Escalations'">
+                            <p id="save-preset-error" class="text-red-500 text-sm hidden"></p>
+                        </div>
+                        <div class="p-4 bg-gray-50 flex justify-end gap-3">
+                            <button id="cancel-save-preset-btn" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold">Cancel</button>
+                            <button id="confirm-save-preset-btn" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold">Save</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderManagePresetsModal() {
+            const presets = Object.keys(state.filterPresets).sort();
+            const presetsHTML = presets.length > 0 ? presets.map(name => `
+                <div class="flex justify-between items-center p-2 border-b last:border-b-0">
+                    <span class="text-gray-700 break-all pr-2">${name}</span>
+                    <button data-preset-name="${name}" class="delete-preset-btn p-1 text-red-500 hover:text-red-700 hover:bg-red-100 rounded-full transition-colors flex-shrink-0">${icons.x.replace('width="24"','width="18"').replace('height="24"','height="18"')}</button>
+                </div>
+            `).join('') : '<p class="text-gray-500 text-center p-4">No saved presets.</p>';
+
+            modalRoot.innerHTML = `
+                <div id="manage-presets-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div class="bg-white rounded-lg shadow-xl w-full max-w-md flex flex-col" style="max-height: 80vh;">
+                        <div class="p-4 border-b flex justify-between items-center flex-shrink-0">
+                            <h2 class="text-xl font-bold text-gray-800">Manage Presets</h2>
+                            <button id="close-presets-modal-btn" class="p-2 rounded-full hover:bg-gray-200">${icons.x}</button>
+                        </div>
+                        <div id="presets-list-container" class="p-2 flex-grow overflow-y-auto">
+                            ${presetsHTML}
+                        </div>
+                        <div class="p-2 bg-gray-50 flex justify-end flex-shrink-0 border-t">
+                             <button id="close-presets-modal-btn-footer" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold">Close</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function closeModal() {
+            modalRoot.innerHTML = '';
+        }
+
         // --- LOGIC & DATA HANDLING ---
         function handleFile(file) {
             if (!file) return;
@@ -287,7 +410,12 @@
         }
 
         async function downloadFilteredCSV() {
-            if (state.totalFilteredRows === 0) { alert("No data to download."); return; }
+            if (state.totalFilteredRows === 0) { 
+                // Using a custom modal instead of alert
+                modalRoot.innerHTML = `<div class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4"><div class="bg-white rounded-lg shadow-xl p-6 text-center"><p class="text-lg text-gray-700 mb-4">No data to download.</p><button id="close-alert-modal" class="px-4 py-2 bg-blue-600 text-white rounded-lg">OK</button></div></div>`;
+                document.getElementById('close-alert-modal').onclick = () => modalRoot.innerHTML = '';
+                return;
+            }
             // Tell the worker to start streaming the filtered data back
             fileParserWorker.postMessage({ type: 'request-csv-string' });
             // The result will be handled by the 'csv-string-data' message listener
@@ -324,7 +452,7 @@
             const hasActiveFilters = Object.keys(state.filters).length > 0 && Object.values(state.filters).some(value => {
                 if (Array.isArray(value)) return value.length > 0;
                 if (typeof value === 'object' && value !== null) return value.start || value.end;
-                return false;
+                return !!value;
             });
             fileParserWorker.postMessage({ type: 'request-analysis', useFilteredData: hasActiveFilters });
         }
@@ -335,7 +463,7 @@
             const { filteredConversations, filteredPeakConcurrency, overallContainmentRate } = analysisData.summary;
 
             const summaryCard = (title, value) => `<div class="bg-white p-3 rounded-lg text-center shadow-sm"><h4 class="text-sm font-medium text-gray-500">${title}</h4><p class="text-xl font-bold text-gray-800 mt-1">${value}</p></div>`;
-            modalRoot.innerHTML = `<div id="ca-modal-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4 opacity-0"><div id="ca-modal-container" class="bg-white rounded-2xl shadow-2xl w-full max-w-7xl h-[90vh] flex flex-col transform scale-95"><div class="p-4 border-b flex justify-between items-center flex-shrink-0"><h2 class="text-2xl font-bold text-gray-800">Deeper Analysis</h2><div class="flex items-center gap-4"><button id="ca-download-report-btn" class="px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700">Download Report</button><button id="ca-close-modal-btn" class="p-2 rounded-full hover:bg-gray-200">${icons.x}</button></div></div><div class="flex-grow p-6 overflow-y-auto"><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">${summaryCard('Filtered Conversations', filteredConversations.toLocaleString())}${summaryCard('Filtered Peak Concurrency', filteredPeakConcurrency)}${summaryCard('Overall Containment Rate', `${overallContainmentRate}%`)}</div><div class="grid grid-cols-1 lg:grid-cols-2 gap-6"><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Containment Rate Trend</h3><div style="height: 250px;"><canvas id="ca-containment-trend-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Avg. Handle Time Trend (Minutes)</h3><div style="height: 250px;"><canvas id="ca-handle-time-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Daily Conversation Volume</h3><div style="height: 250px;"><canvas id="ca-daily-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Weekly Conversation Volume</h3><div style="height: 250px;"><canvas id="ca-weekly-chart"></canvas></div></div></div></div></div></div>`;
+            modalRoot.innerHTML = `<div id="ca-modal-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4 opacity-0"><div id="ca-modal-container" class="bg-white rounded-2xl shadow-2xl w-full max-w-7xl h-[90vh] flex flex-col transform scale-95"><div class="p-4 border-b flex justify-between items-center flex-shrink-0"><h2 class="text-2xl font-bold text-gray-800">Deeper Analysis</h2><div class="flex items-center gap-4"><button id="ca-download-report-btn" class="px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700">Download Report</button><button id="ca-close-modal-btn" class="p-2 rounded-full hover:bg-gray-200">${icons.x}</button></div></div><div class="flex-grow p-6 overflow-y-auto"><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">${summaryCard('Filtered Conversations', filteredConversations.toLocaleString())}${summaryCard('Filtered Peak Concurrency', filteredPeakConcurrency)}${summaryCard('Overall Containment Rate', `${overallContainmentRate}%`)}</div><div class="grid grid-cols-1 lg:grid-cols-2 gap-6"><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Concurrency Trend</h3><div style="height: 250px;"><canvas id="ca-concurrency-trend-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Containment Rate Trend</h3><div style="height: 250px;"><canvas id="ca-containment-trend-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Avg. Handle Time Trend (Minutes)</h3><div style="height: 250px;"><canvas id="ca-handle-time-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Daily Conversation Volume</h3><div style="height: 250px;"><canvas id="ca-daily-chart"></canvas></div></div><div class="p-4 rounded-lg bg-gray-50"><h3 class="font-semibold mb-2 text-center">Weekly Conversation Volume</h3><div style="height: 250px;"><canvas id="ca-weekly-chart"></canvas></div></div></div></div></div></div>`;
             
             setTimeout(() => {
                 document.getElementById('ca-modal-overlay').classList.remove('opacity-0');
@@ -344,7 +472,7 @@
 
             setupConsumptionAnalysis(analysisData);
             document.getElementById('ca-close-modal-btn').addEventListener('click', closeConsumptionAnalysisModal);
-            document.getElementById('ca-download-report-btn').addEventListener('click', downloadConsumptionReport);
+            document.getElementById('ca-download-report-btn').addEventListener('click', () => downloadConsumptionReport(analysisData));
             document.getElementById('ca-modal-overlay').addEventListener('click', (e) => { if (e.target.id === 'ca-modal-overlay') closeConsumptionAnalysisModal(); });
             
             const btn = document.getElementById('deeper-analysis-btn');
@@ -362,16 +490,59 @@
                  setTimeout(() => {
                     modalRoot.innerHTML = '';
                     Object.values(state.consumptionAnalysisState).forEach(chart => { if (chart && typeof chart.destroy === 'function') chart.destroy(); });
-                    state.consumptionAnalysisState = { dailyChart: null, weeklyChart: null, containmentChart: null, handleTimeChart: null, originalData: [] };
+                    state.consumptionAnalysisState = { dailyChart: null, weeklyChart: null, containmentChart: null, handleTimeChart: null, concurrencyChart: null, originalData: [] };
                  }, 300);
             }
         }
         
         function setupConsumptionAnalysis(data) {
+            ca_displayConcurrencyTrendChart(data.concurrencyTrendData);
             ca_displayContainmentTrendChart(data.containmentTrendData);
             ca_displayHandleTimeChart(data.handleTimeData);
             ca_displayDailyChart(data.volumeData);
             ca_displayWeeklyChart(data.volumeData);
+        }
+
+        function ca_displayConcurrencyTrendChart(concurrencyData) {
+            const chartEl = document.getElementById('ca-concurrency-trend-chart');
+            if (!chartEl) return;
+            const labels = concurrencyData.map(d => d.date);
+            const maxData = concurrencyData.map(d => d.max);
+            const avgData = concurrencyData.map(d => d.avg);
+
+            state.consumptionAnalysisState.concurrencyChart = new Chart(chartEl, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Max Concurrency',
+                            data: maxData,
+                            borderColor: '#ef4444',
+                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                            fill: true,
+                            tension: 0.2
+                        },
+                        {
+                            label: 'Avg Concurrency',
+                            data: avgData,
+                            borderColor: '#f97316',
+                            backgroundColor: 'rgba(249, 115, 22, 0.1)',
+                            fill: true,
+                            tension: 0.2
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { type: 'time', time: { unit: 'day' } },
+                        y: { beginAtZero: true, title: { display: true, text: 'Concurrent Conversations' } }
+                    },
+                    plugins: { legend: { display: true } }
+                }
+            });
         }
 
         function ca_displayContainmentTrendChart(containmentTrendData) {
@@ -454,28 +625,83 @@
             return colors[index % colors.length];
         }
         
-        async function downloadConsumptionReport() {
+        async function downloadConsumptionReport(analysisData) {
             const { jsPDF } = window.jspdf;
-            const doc = new jsPDF({ orientation: 'l', unit: 'mm', format: 'a4' });
-            const addImageToPdf = async (element, doc, yPos, title) => {
+            const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
+
+            const addHeader = (doc, pageTitle) => {
+                doc.setFontSize(10);
+                doc.setTextColor(100);
+                doc.text('Deeper Analysis Report', 15, 10);
+                doc.text(pageTitle, doc.internal.pageSize.getWidth() / 2, 10, { align: 'center' });
+            };
+
+            const addFooter = (doc) => {
+                const pageCount = doc.internal.getNumberOfPages();
+                for (let i = 1; i <= pageCount; i++) {
+                    doc.setPage(i);
+                    doc.setFontSize(8);
+                    doc.setTextColor(150);
+                    doc.text(`Page ${i} of ${pageCount}`, doc.internal.pageSize.getWidth() / 2, 287, { align: 'center' });
+                }
+            };
+
+            // --- Title Page ---
+            doc.setFontSize(22);
+            doc.text('Deeper Analysis Report', doc.internal.pageSize.getWidth() / 2, 120, { align: 'center' });
+            doc.setFontSize(12);
+            doc.text(`Source File: ${state.fileName}`, doc.internal.pageSize.getWidth() / 2, 130, { align: 'center' });
+            doc.text(`Report Generated: ${new Date().toLocaleDateString()}`, doc.internal.pageSize.getWidth() / 2, 135, { align: 'center' });
+
+            // --- Summary Page ---
+            doc.addPage();
+            addHeader(doc, 'Summary');
+            doc.setFontSize(18);
+            doc.text('Analysis Summary', 15, 25);
+            doc.setFontSize(12);
+            doc.text(`Time Range of Analyzed Data: ${state.summaryStats.timeRange}`, 15, 35);
+            doc.text(`Total Conversations in File: ${state.summaryStats.totalRows.toLocaleString()}`, 15, 42);
+            doc.text(`Analyzed Conversations: ${analysisData.summary.filteredConversations.toLocaleString()}`, 15, 49);
+            doc.text(`Peak Concurrency in Analyzed Set: ${analysisData.summary.filteredPeakConcurrency.toLocaleString()}`, 15, 56);
+
+
+            const chartElements = [
+                { id: 'ca-concurrency-trend-chart', title: 'Concurrency Trend' },
+                { id: 'ca-containment-trend-chart', title: 'Containment Rate Trend' },
+                { id: 'ca-handle-time-chart', title: 'Avg. Handle Time Trend (Minutes)' },
+                { id: 'ca-daily-chart', title: 'Daily Conversation Volume' },
+                { id: 'ca-weekly-chart', title: 'Weekly Conversation Volume' },
+            ];
+
+            doc.addPage();
+            addHeader(doc, 'Chart Analysis');
+            let yPos = 20;
+
+            for (let i = 0; i < chartElements.length; i++) {
+                const chartInfo = chartElements[i];
+                const element = document.getElementById(chartInfo.id).parentElement;
                 const canvas = await html2canvas(element, { scale: 2, backgroundColor: '#ffffff' });
                 const imgData = canvas.toDataURL('image/png');
-                const pageWidth = doc.internal.pageSize.getWidth(); const margin = 15;
-                const imgWidth = pageWidth - (margin * 2);
-                const imgHeight = (canvas.height * imgWidth) / canvas.width;
-                doc.setFontSize(16); doc.text(title, margin, yPos);
-                doc.addImage(imgData, 'PNG', margin, yPos + 5, imgWidth, imgHeight);
-                return yPos + imgHeight + 15;
-            };
-            doc.addPage();
-            let yPos = 15;
-            yPos = await addImageToPdf(document.getElementById('ca-containment-trend-chart').parentElement, doc, yPos, 'Containment Rate Trend');
-            yPos = await addImageToPdf(document.getElementById('ca-handle-time-chart').parentElement, doc, yPos, 'Avg. Handle Time Trend');
-            doc.addPage();
-            yPos = 15;
-            yPos = await addImageToPdf(document.getElementById('ca-daily-chart').parentElement, doc, yPos, 'Daily Conversation Volume');
-            yPos = await addImageToPdf(document.getElementById('ca-weekly-chart').parentElement, doc, yPos, 'Weekly Conversation Volume');
-            doc.deletePage(1);
+                
+                const pageWidth = doc.internal.pageSize.getWidth();
+                const margin = 15;
+                const chartWidth = pageWidth - (margin * 2);
+                const chartHeight = (canvas.height * chartWidth) / canvas.width;
+
+                if (yPos + chartHeight + 20 > doc.internal.pageSize.getHeight()) {
+                    doc.addPage();
+                    addHeader(doc, 'Chart Analysis');
+                    yPos = 20;
+                }
+
+                doc.setFontSize(12);
+                doc.text(chartInfo.title, margin, yPos);
+                doc.addImage(imgData, 'PNG', margin, yPos + 5, chartWidth, chartHeight);
+                yPos += chartHeight + 15;
+            }
+            
+            doc.deletePage(1); // Delete the initial blank page
+            addFooter(doc);
             doc.save('Deeper_Analysis_Report.pdf');
         }
 
@@ -485,19 +711,16 @@
             const workerCode = `
                 self.importScripts('https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js');
                 let fullData = [];
-                let filteredData = []; // This will always hold the currently filtered dataset
+                let filteredData = [];
                 let headers = [];
                 let customMetricKeys = [];
                 let filterOptions = {};
                 let highCardinalityFields = [];
 
-                // --- UTILITY FUNCTIONS (MOVED INTO WORKER) ---
                 function parseDate(dateString) {
                     if (!dateString) return null;
-                    // --- FIX: Robust, timezone-agnostic date parsing ---
                     const match = dateString.match(/(\\d{4})-(\\d{2})-(\\d{2})[T ](\\d{2}):(\\d{2})/);
                     if (!match) return null;
-                    // Creates a date using UTC values to avoid timezone shifts
                     const date = new Date(Date.UTC(match[1], match[2] - 1, match[3], match[4], match[5]));
                     return isNaN(date) ? null : date;
                 }
@@ -545,34 +768,38 @@
                     });
                 }
 
-                // --- NEW: Function to calculate summary stats on filtered data ---
                 function calculateFilteredSummary(data) {
-                    const summary = {};
-                    const dates = data.map(row => parseDate(row.created)).filter(d => d);
-                    
-                    let minDate = null;
-                    let maxDate = null;
-                    if (dates.length > 0) {
-                        minDate = dates[0];
-                        maxDate = dates[0];
-                        for (let i = 1; i < dates.length; i++) {
-                            if (dates[i] < minDate) minDate = dates[i];
-                            if (dates[i] > maxDate) maxDate = dates[i];
-                        }
-                    }
-
-                    summary.timeRange = minDate && maxDate ? \`\${minDate.toLocaleDateString()} - \${maxDate.toLocaleDateString()}\` : 'N/A';
+                    const summary = {
+                        peakConcurrency: 0,
+                        avgConcurrency: 0,
+                        timeRange: 'N/A'
+                    };
+                    if (data.length === 0) return summary;
 
                     const events = [];
+                    let totalHandleTimeMinutes = 0;
                     data.forEach(row => {
                         const start = parseDate(row.created);
-                        const end = parseDate(row.finished); 
+                        const end = parseDate(row.finished);
                         if (start && end) {
                             events.push({ time: start.getTime(), type: 'start' });
                             events.push({ time: end.getTime(), type: 'end' });
+                            totalHandleTimeMinutes += (end.getTime() - start.getTime()) / (1000 * 60);
                         }
                     });
+
+                    if (events.length === 0) return summary;
+
                     events.sort((a, b) => a.time - b.time);
+
+                    const firstEventTime = events[0].time;
+                    const lastEventTime = events[events.length - 1].time;
+                    const totalDurationMinutes = (lastEventTime - firstEventTime) / (1000 * 60);
+
+                    if (totalDurationMinutes > 0) {
+                        summary.avgConcurrency = totalHandleTimeMinutes / totalDurationMinutes;
+                    }
+
                     let maxConcurrency = 0, currentConcurrency = 0;
                     for (const event of events) {
                         if (event.type === 'start') {
@@ -583,6 +810,8 @@
                         }
                     }
                     summary.peakConcurrency = maxConcurrency;
+                    summary.timeRange = new Date(firstEventTime).toLocaleDateString() + ' - ' + new Date(lastEventTime).toLocaleDateString();
+                    
                     return summary;
                 }
                 
@@ -625,7 +854,7 @@
                                                     let lowerTrimmedKey = trimmedKey.toLowerCase();
                                                     
                                                     if (standardHeaders.has(lowerTrimmedKey)) {
-                                                        trimmedKey = \`\${trimmedKey}_Custom\`;
+                                                        trimmedKey = trimmedKey + '_Custom';
                                                         lowerTrimmedKey = trimmedKey.toLowerCase();
                                                     }
                                                     row[lowerTrimmedKey] = value ? value.trim() : null;
@@ -665,7 +894,7 @@
                                     if(seconds !== null) { totalSeconds += seconds; validCount++; }
                                 });
                                 const avgSeconds = validCount > 0 ? totalSeconds / validCount : 0;
-                                summaryStats.avgHandleTime = \`\${Math.floor(avgSeconds / 60).toString().padStart(2, '0')}:\${Math.floor(avgSeconds % 60).toString().padStart(2, '0')}\`;
+                                summaryStats.avgHandleTime = Math.floor(avgSeconds / 60).toString().padStart(2, '0') + ':' + Math.floor(avgSeconds % 60).toString().padStart(2, '0');
                                 
                                 self.postMessage({
                                     type: 'parse-success',
@@ -721,12 +950,12 @@
                     
                     } else if (messageType === 'request-analysis') {
                         const dataToAnalyze = e.data.useFilteredData ? filteredData : fullData;
-                        const dailyAggregation = {}, handleTimeAggregation = {}, containmentAggregation = {};
+                        const dailyAggregation = {}, handleTimeAggregation = {}, containmentAggregation = {}, concurrencyAggregation = {};
                         const events = [];
 
                         dataToAnalyze.forEach(row => {
                             const start = parseDate(row.created);
-                            const end = parseDate(row.finished); // --- FIX: Use 'finished' column ---
+                            const end = parseDate(row.finished); 
                             if(start && end) {
                                 events.push({ time: start.getTime(), type: 'start' });
                                 events.push({ time: end.getTime(), type: 'end' });
@@ -735,7 +964,7 @@
 
                             const dateString = start.toISOString().slice(0, 10);
                             const handleTime = parseHandleTime(row['total handle time']);
-                            const key = \`\${row.domain || 'Unknown'}|\${row.channel || 'Unknown'}|\${dateString}\`;
+                            const key = (row.domain || 'Unknown') + '|' + (row.channel || 'Unknown') + '|' + dateString;
 
                             if (!dailyAggregation[key]) dailyAggregation[key] = { domain: row.domain || 'Unknown', channel: row.channel || 'Unknown', date: dateString, count: 0 };
                             dailyAggregation[key].count++;
@@ -762,6 +991,46 @@
                             }
                         }
 
+                        // --- NEW: Calculate daily concurrency trends ---
+                        const dailyEvents = {};
+                        dataToAnalyze.forEach(row => {
+                            const start = parseDate(row.created);
+                            const end = parseDate(row.finished);
+                            if (start && end) {
+                                const dateString = start.toISOString().slice(0, 10);
+                                if (!dailyEvents[dateString]) dailyEvents[dateString] = [];
+                                dailyEvents[dateString].push({ time: start.getTime(), type: 'start' });
+                                dailyEvents[dateString].push({ time: end.getTime(), type: 'end' });
+                            }
+                        });
+
+                        const concurrencyTrendData = Object.keys(dailyEvents).map(date => {
+                            const dayEvents = dailyEvents[date].sort((a, b) => a.time - b.time);
+                            let dayMax = 0, dayCurrent = 0, totalMinutes = 0;
+                            let dayTotalHandleTime = 0;
+
+                            for(let i = 0; i < dayEvents.length; i++) {
+                                if (dayEvents[i].type === 'start') {
+                                    dayCurrent++;
+                                    if (dayCurrent > dayMax) dayMax = dayCurrent;
+                                } else {
+                                    dayCurrent--;
+                                }
+                                if(i < dayEvents.length - 1) {
+                                    const duration = (dayEvents[i+1].time - dayEvents[i].time) / (1000 * 60);
+                                    dayTotalHandleTime += dayCurrent * duration;
+                                }
+                            }
+                            const dayDuration = (dayEvents[dayEvents.length - 1].time - dayEvents[0].time) / (1000 * 60);
+
+                            return {
+                                date: date,
+                                max: dayMax,
+                                avg: dayDuration > 0 ? dayTotalHandleTime / dayDuration : 0
+                            };
+                        }).sort((a,b) => new Date(a.date) - new Date(b.date));
+
+
                         const handleTimeData = Object.entries(handleTimeAggregation).map(([date, data]) => ({ date, avgMinutes: (data.totalSeconds / data.count) / 60 })).sort((a,b) => new Date(a.date) - new Date(b.date));
                         const containmentTrendData = Object.entries(containmentAggregation).map(([date, data]) => ({ date, rate: data.total > 0 ? (data.contained / data.total) * 100 : 0 })).sort((a,b) => new Date(a.date) - new Date(b.date));
                         
@@ -773,6 +1042,7 @@
                                 volumeData: Object.values(dailyAggregation),
                                 handleTimeData,
                                 containmentTrendData,
+                                concurrencyTrendData,
                                 summary: {
                                     filteredPeakConcurrency: maxConcurrency,
                                     filteredConversations: dataToAnalyze.length,
@@ -805,8 +1075,69 @@
             dropzone.addEventListener('drop', handleDrop);
         }
 
+        // --- FIX: Created a dedicated function for sidebar listeners ---
+        function setupSidebarEventListeners() {
+            const sidebar = document.getElementById('sidebar');
+            if(!sidebar) return;
+
+            sidebar.addEventListener('input', (e) => {
+                if (e.target.matches('#metric-search-input')) {
+                    const searchTerm = e.target.value.toLowerCase();
+                    const filterGroups = document.querySelectorAll('.metric-filter-group');
+                    filterGroups.forEach(group => {
+                        const label = group.querySelector('label').textContent;
+                        if (label.toLowerCase().includes(searchTerm)) {
+                            group.style.display = '';
+                        } else {
+                            group.style.display = 'none';
+                        }
+                    });
+                }
+                if (e.target.matches('input[type="text"][data-filter-key]')) {
+                    const key = e.target.dataset.filterKey;
+                    const value = e.target.value;
+                    if(value) {
+                        state.filters[key] = value;
+                    } else {
+                        delete state.filters[key];
+                    }
+                    state.pagination.currentPage = 1;
+                    document.getElementById('preset-select').value = '';
+                    fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
+                }
+            });
+            sidebar.addEventListener('change', (e) => {
+                if (e.target.matches('input[type="checkbox"]')) {
+                    const key = e.target.dataset.filterKey;
+                    const checkedBoxes = document.querySelectorAll(`input[data-filter-key="${key}"]:checked`);
+                    state.filters[key] = Array.from(checkedBoxes).map(cb => cb.value);
+                    if (Object.values(state.filters[key]).length === 0) delete state.filters[key];
+                    state.pagination.currentPage = 1; 
+                    document.getElementById('preset-select').value = '';
+                    fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
+                }
+                if (e.target.matches('#start-date, #end-date')) {
+                    const startDate = document.getElementById('start-date').value;
+                    const endDate = document.getElementById('end-date').value;
+                    state.filters.dateRange = { start: startDate, end: endDate };
+                    if (!startDate && !endDate) {
+                        delete state.filters.dateRange;
+                    }
+                    state.pagination.currentPage = 1;
+                    document.getElementById('preset-select').value = '';
+                    fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
+                }
+                if (e.target.matches('#preset-select')) {
+                    const presetName = e.target.value;
+                    if (presetName) {
+                        applyPreset(presetName);
+                    }
+                }
+            });
+        }
+
         function setupDashboardEventListeners() {
-            // Use event delegation on a stable parent
+            // Use event delegation on a stable parent for clicks
             appRoot.addEventListener('click', (e) => {
                 const toggleBtn = e.target.closest('#toggle-sidebar-btn');
                 const resetBtn = e.target.closest('#reset-app-btn');
@@ -817,6 +1148,8 @@
                 const analysisBtn = e.target.closest('#deeper-analysis-btn');
                 const collapsibleHeader = e.target.closest('[data-collapsible-key]');
                 const tableHeader = e.target.closest('th[data-sort-key]');
+                const savePresetBtn = e.target.closest('#save-preset-btn');
+                const managePresetsBtn = e.target.closest('#manage-presets-btn');
 
                 if (toggleBtn) {
                     state.isSidebarOpen = !state.isSidebarOpen; 
@@ -838,6 +1171,7 @@
                     document.querySelectorAll('#sidebar input[type="text"]').forEach(input => input.value = '');
                     document.getElementById('start-date').value = '';
                     document.getElementById('end-date').value = '';
+                    document.getElementById('preset-select').value = '';
                     state.filters = {};
                     state.pagination.currentPage = 1;
                     fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
@@ -860,56 +1194,64 @@
                     state.pagination.currentPage = 1;
                     fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
                 }
+                if (savePresetBtn) {
+                    renderSavePresetModal();
+                }
+                if (managePresetsBtn) {
+                    renderManagePresetsModal();
+                }
+            });
+            
+            modalRoot.addEventListener('click', (e) => {
+                // Save Preset Modal
+                const confirmSaveBtn = e.target.closest('#confirm-save-preset-btn');
+                const cancelSaveBtn = e.target.closest('#cancel-save-preset-btn, #save-preset-overlay');
+                
+                // Manage Presets Modal
+                const closeManageBtn = e.target.closest('#close-presets-modal-btn, #close-presets-modal-btn-footer');
+                const deletePresetBtn = e.target.closest('.delete-preset-btn');
+                const manageOverlay = e.target.closest('#manage-presets-overlay');
+
+                if (confirmSaveBtn) {
+                    const input = document.getElementById('preset-name-input');
+                    const errorEl = document.getElementById('save-preset-error');
+                    const presetName = input.value.trim();
+                    if (presetName) {
+                        state.filterPresets[presetName] = JSON.parse(JSON.stringify(state.filters)); // Deep copy
+                        savePresetsToLocalStorage();
+                        document.getElementById('sidebar').outerHTML = renderSidebar(); 
+                        setupSidebarEventListeners(); // Re-attach after render
+                        closeModal();
+                    } else {
+                        errorEl.textContent = 'Preset name cannot be empty.';
+                        errorEl.classList.remove('hidden');
+                    }
+                }
+
+                if (cancelSaveBtn && (cancelSaveBtn.id === 'cancel-save-preset-btn' || e.target.id === 'save-preset-overlay')) {
+                    closeModal();
+                }
+
+                if (closeManageBtn) {
+                    closeModal();
+                }
+                
+                if (deletePresetBtn) {
+                    const presetName = deletePresetBtn.dataset.presetName;
+                    delete state.filterPresets[presetName];
+                    savePresetsToLocalStorage();
+                    renderManagePresetsModal(); 
+                    document.getElementById('sidebar').outerHTML = renderSidebar(); 
+                    setupSidebarEventListeners(); // Re-attach after render
+                }
+                
+                if (manageOverlay && e.target.id === 'manage-presets-overlay') {
+                    closeModal();
+                }
             });
 
-            const sidebar = document.getElementById('sidebar');
-            if(sidebar) {
-                 sidebar.addEventListener('input', (e) => {
-                    if (e.target.matches('#metric-search-input')) {
-                        const searchTerm = e.target.value.toLowerCase();
-                        const filterGroups = document.querySelectorAll('.metric-filter-group');
-                        filterGroups.forEach(group => {
-                            const label = group.querySelector('label').textContent;
-                            if (label.toLowerCase().includes(searchTerm)) {
-                                group.style.display = '';
-                            } else {
-                                group.style.display = 'none';
-                            }
-                        });
-                    }
-                    if (e.target.matches('input[type="text"][data-filter-key]')) {
-                        const key = e.target.dataset.filterKey;
-                        const value = e.target.value;
-                        if(value) {
-                            state.filters[key] = value;
-                        } else {
-                            delete state.filters[key];
-                        }
-                        state.pagination.currentPage = 1;
-                        fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
-                    }
-                 });
-                 sidebar.addEventListener('change', (e) => {
-                    if (e.target.matches('input[type="checkbox"]')) {
-                        const key = e.target.dataset.filterKey;
-                        const checkedBoxes = document.querySelectorAll(`input[data-filter-key="${key}"]:checked`);
-                        state.filters[key] = Array.from(checkedBoxes).map(cb => cb.value);
-                        if (Object.values(state.filters[key]).length === 0) delete state.filters[key];
-                        state.pagination.currentPage = 1; 
-                        fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
-                    }
-                    if (e.target.matches('#start-date, #end-date')) {
-                        const startDate = document.getElementById('start-date').value;
-                        const endDate = document.getElementById('end-date').value;
-                        state.filters.dateRange = { start: startDate, end: endDate };
-                        if (!startDate && !endDate) {
-                            delete state.filters.dateRange;
-                        }
-                        state.pagination.currentPage = 1;
-                        fileParserWorker.postMessage({ type: 'request-page', filters: state.filters, pagination: state.pagination, sortConfig: state.sortConfig });
-                    }
-                });
-            }
+            // Initial setup for the sidebar
+            setupSidebarEventListeners();
         }
         
         // --- TARGETED UPDATE FUNCTIONS ---
@@ -929,9 +1271,6 @@
                 document.getElementById('sidebar').classList.toggle('flex');
                 document.getElementById('toggle-sidebar-btn').innerHTML = `<span class="w-6 h-6 text-gray-600 inline-block">${state.isSidebarOpen ? icons.x : icons.filter}</span>`;
             });
-        }
-        function updateSidebarButtons() {
-            // This function is no longer needed for the Deeper Analysis button
         }
         
         function setupAndAttachWorker() {
